@@ -169,7 +169,7 @@ describe('bills', () => {
     const y2 = ['Fee AY ##,900', 'Audit fee,300', 'New Name,New'];
     const y3 = ['audit FEE,1', 'Old item 04-05,5'];
     expect(mergeHistory([y1, y2, y3])).toEqual([
-      'SHRI A,0', 'Fee AY ##,0', 'Expenses,0', 'New Name,New', 'SMT B,0', 'Expenses,0', 'Audit fee,0', 'Old item 04-05,0',
+      'SHRI A,', 'Fee AY ##,0', 'Expenses,0', 'New Name,New', 'SMT B,', 'Expenses,0', 'Audit fee,0', 'Old item 04-05,0',
     ]);
     // Older literal years match ignoring the year.
     expect(mergeHistory([['Item 05-06,1'], ['Item 04-05,2']])).toEqual(['Item 05-06,0']);

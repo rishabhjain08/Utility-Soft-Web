@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import { Client, checkName, UserError } from '../core/workspace';
 import { writeDropdowns } from '../core/config';
 import { sameName } from '../core/sort';
@@ -364,14 +364,4 @@ export function DropdownDialog({ s, onClose, onSaved }: { s: Session; onClose: (
       </div>
     </Modal>
   );
-}
-
-// ---------- Locked client ----------
-
-export function useFiltered(clients: Client[], query: string) {
-  return useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return -1;
-    return clients.findIndex((c) => c.name.toLowerCase().includes(q));
-  }, [clients, query]);
 }

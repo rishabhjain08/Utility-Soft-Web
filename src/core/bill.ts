@@ -93,7 +93,8 @@ function looseKey(key: string): string {
 /**
  * Builds a new bill from the same bill in earlier years (most recent first):
  * every row of the most recent bill, then rows from older bills whose
- * description is not already present. Amounts are reset to 0.
+ * description is not already present. Amounts are reset to 0 (rows that had
+ * no amount, like a person's name, keep none).
  * Input rows are raw stored lines (with "##").
  */
 export function mergeHistory(sources: string[][]): string[] {
@@ -102,7 +103,7 @@ export function mergeHistory(sources: string[][]): string[] {
   sources.forEach((lines, idx) => {
     const before = new Set(seen);
     for (const line of lines) {
-      const { desc } = parseBillLine(line);
+      const { desc, amount } = parseBillLine(line);
       if (desc.trim() === SEPARATOR) {
         if (idx === 0) out.push(`${SEPARATOR},${SEPARATOR_AMOUNT}`);
         continue;
@@ -112,7 +113,8 @@ export function mergeHistory(sources: string[][]): string[] {
       if (idx > 0 && (before.has(key) || before.has(looseKey(key)))) continue;
       seen.add(key);
       seen.add(looseKey(key));
-      out.push(`${desc},0`);
+      // Amounts restart at 0; heading rows without an amount stay without one.
+      out.push(`${desc},${amount.trim() === '' ? '' : '0'}`);
     }
   });
   return out;

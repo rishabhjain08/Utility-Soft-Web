@@ -1,5 +1,5 @@
-import { ComponentChildren, createContext, render } from 'preact';
-import { useContext, useEffect, useRef, useState } from 'preact/hooks';
+import { ComponentChildren, render } from 'preact';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { UserError } from '../core/workspace';
 
 // ---------- toasts ----------
@@ -235,11 +235,4 @@ function PromptBody({ o, done }: { o: PromptOpts; done: (v: string | null) => vo
       {o.hint && <p class="hint">{o.hint}</p>}
     </Modal>
   );
-}
-
-// ---------- context ----------
-
-export const SessionContext = createContext<unknown>(null);
-export function useSessionContext<T>(): T {
-  return useContext(SessionContext) as T;
 }

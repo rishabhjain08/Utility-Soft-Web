@@ -917,6 +917,10 @@ ul.suggest li.hi {
 }
 
 @media print {
+  html,
+  body.printing {
+    background: #fff;
+  }
   body.printing > *:not(#print-root) {
     display: none !important;
   }
