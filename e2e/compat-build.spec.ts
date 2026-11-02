@@ -50,11 +50,12 @@ test('build data with the web app', async ({ page }) => {
   await cell(page, 1, 'amount', '15000');
   await page.locator('.grid [data-row="2"][data-col="desc"]').click();
   await page.keyboard.press('Control+b');
-  await cell(page, 3, 'desc', 'Expenses');
-  await cell(page, 3, 'amount', '500');
+  await cell(page, 3, 'desc', 'SMT. KAMLA');
+  await cell(page, 4, 'desc', 'Expenses');
+  await cell(page, 4, 'amount', '500');
   await waitSaved(page);
   await expect.poll(() => gridRows(page)).toEqual([
-    'pooja|20', 'Fee for Tax Audit for the Assessment Year 06-07|15000', '--sep--', 'Expenses|500',
+    'pooja|20', 'Fee for Tax Audit for the Assessment Year 06-07|15000', '--sep--', 'SMT. KAMLA|', 'Expenses|500',
   ]);
   await page.getByRole('button', { name: '← Done' }).click();
 
@@ -86,17 +87,14 @@ test('build data with the web app', async ({ page }) => {
   await expectClients(page, ['1|AMIT KUMAR|101-102', '2|PREM|', '2A|PRIYA|', '3|RISHABH|']);
 
   await page.getByRole('cell', { name: 'RISHABH' }).dblclick();
+  // "SMT. KAMLA" had no amount last year: the Java program could not open this
+  // bill unless the web app pads the row (see protectForJava).
   await expect.poll(() => gridRows(page)).toEqual([
-    'pooja|0', 'Fee for Tax Audit for the Assessment Year 07-08|0', '--sep--', 'Expenses|0',
+    'pooja|0', 'Fee for Tax Audit for the Assessment Year 07-08|0', '--sep--', 'SMT. KAMLA|0', 'Expenses|0',
   ]);
   await cell(page, 0, 'amount', '25');
   await cell(page, 1, 'amount', '16000');
-  // A heading row without an amount, only in this year. (The Java program cannot
-  // open a bill whose previous-year copy has an amount-less row with the same
-  // text — a bug in the Java program itself — so the heading is new this year.)
-  await page.locator('.grid [data-row="3"][data-col="desc"]').click();
-  await page.keyboard.press('Control+i');
-  await cell(page, 3, 'desc', 'SMT. KAMLA');
+  await cell(page, 3, 'amount', '');
   await cell(page, 4, 'amount', '600');
   await waitSaved(page);
   await page.getByRole('button', { name: '← Done' }).click();

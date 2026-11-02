@@ -60,12 +60,15 @@ def main():
         ])
         lock = (WORK / 'data' / 'activelocation.txt').read_text()
         check('Java locks the client in activelocation.txt', lock.strip(), '07-08,RISHABH')
-        # AMIT KUMAR's Tax bill (description containing a comma) in 06-07 via the year box.
+        # The same bill in 06-07 via the editor's year box.
+        app.show_options()
         app.cmd('combo 0 select 06-07')
         app.wait(1200)
         app.cmd('tab 0 Audit')
         cols, rows = bill_rows(app)
-        check('06-07 version of the same bill', rows[:2], [['1', 'pooja', '20', '--', '--', '--'], ['2', 'Fee for Tax Audit for the Assessment Year 06-07', '15000', '--', '--', '--']])
+        check('06-07 version of the same bill', rows, [
+            ['1', 'pooja', '20', '--', '--', '--'], ['2', 'Fee for Tax Audit for the Assessment Year 06-07', '15000', '--', '--', '--'],
+            ['', 'New Name', '', '--', '--', '--'], ['3', 'SMT. KAMLA', '', '--', '--', '--'], ['4', 'Expenses', '500', '--', '--', '--']])
         app.bills_button('Done')
         app.wait(800)
         check('Java releases the lock', (WORK / 'data' / 'activelocation.txt').read_text().strip(), '')
@@ -103,6 +106,28 @@ def main():
                         str(WORK / 'data/bills/07-08/RISHABH/Audit/PREM CHAND.txt')],
                        cwd=WORK, env={'DISPLAY': DISPLAY, 'PATH': '/usr/bin:/bin'}, capture_output=True, text=True)
     check('Java prints the web-written bill', r.stdout.strip().splitlines()[-1] if r.stdout.strip() else r.stderr[-300:], 'pages=2')
+
+    # Java-written data that the Java program could not open, after the web app opened it.
+    repair_src = HERE.parent / '.tmp' / 'compat-repair'
+    repair = HERE.parent / '.tmp' / 'compat-repair-java'
+    if repair_src.exists():
+        shutil.rmtree(repair, ignore_errors=True)
+        shutil.copytree(repair_src, repair)
+        with JavaApp(repair, 7106) as app:
+            app.login('puja')
+            app.cmd('combo 0 select 06-07')
+            app.wait(800)
+            app.cmd('table 0 select 1')
+            app.click('OK')
+            app.wait(1500)
+            check('Java opens the repaired bill', 'Frames.bills' in app.windows(), True)
+            cols, rows = bill_rows(app)
+            check('repaired bill rows', rows, [['1', 'SHRI PREM CHAND', '', '--', '--', '--'], ['2', 'Fee', '200', '100', '--', '--']])
+            app.bills_button('Done')
+            app.wait(800)
+            check('Java releases the lock', (repair / 'data' / 'activelocation.txt').read_text().strip(), '')
+    else:
+        print('SKIP repaired-bill check (run e2e/compat-repair.spec.ts first)')
 
     print()
     print('ALL PASSED' if not failures else f'{len(failures)} FAILED: {failures}')

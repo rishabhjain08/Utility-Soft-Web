@@ -57,6 +57,17 @@ export function UtilityDialog({ s, year, selection, onClose, onCopy, onNextYear,
     });
   };
 
+  const checkAll = () =>
+    busy('Checking bills…', async () => {
+      const r = await s.ws.protectAll((p) => setBusyLabel(`Checking bills… ${p.checked}`));
+      toast(
+        r.fixed
+          ? `Checked ${r.checked} bills; fixed ${r.fixed} so the desktop version can open them.`
+          : `Checked ${r.checked} bills; the desktop version can open all of them.`,
+        'ok',
+      );
+    });
+
   const item = (label: string, help: string, fn: () => void, disabled = false) => (
     <button class="util-item" onClick={fn} disabled={disabled}>
       <b>{label}</b>
@@ -86,6 +97,7 @@ export function UtilityDialog({ s, year, selection, onClose, onCopy, onNextYear,
           <h3>Backup</h3>
           {item('Backup and auto-backup…', 'Back up now, or choose where to back up when exiting.', () => setSub('backup'))}
           {item('Data location…', `Currently: ${s.dataLabel}`, () => setSub('data'))}
+          {item('Check bills for the desktop version', 'Fix bills the Java version could not open. Also runs each time you open Utility Soft.', checkAll)}
         </section>
         <section>
           <h3>Setup</h3>

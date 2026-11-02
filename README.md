@@ -99,14 +99,27 @@ through the Java program's own windows is opened and printed by the web app.
   existing folder exited it.
 - A Tab character or other control characters in any text corrupted the files.
 - A wrong password was ignored silently.
-- When copying bills forward, rows without an amount (such as a person's name) were given 0.
 
-### Known problem in the Java program (unchanged, for mixed use)
+### Protecting the Java program from a crash in its own code
 
-The Java program cannot open a bill whose previous-year copy has a row with **no amount**
-whose text also appears in this year's bill. It fails and leaves the client marked “already
-open” until it restarts. The Java program writes such data itself (type a row without an
-amount). The web app opens these bills normally.
+The Java program fails to open a bill when one of its rows matches (same text, ignoring case)
+a row in the previous three years' copies of that bill whose only amount is blank or not a
+number. This happens in ordinary use, for example when a person's name is typed without an
+amount and the bill is carried into the next year. It then also leaves the client marked
+"already open" until Java restarts.
+
+The Java program can't be changed, so the web app keeps the data clear of this:
+
+- Whenever it saves, creates, renames or copies a bill, it checks that bill against the previous
+  three years, and checks the next three years' copies against it. Any row that would trip the
+  Java program gets one or more trailing spaces added to its text. Java compares the text
+  exactly, so the rows no longer match. Trailing spaces are invisible on screen and on both
+  versions' printouts, and the web app ignores them when matching years. In the Java window that
+  row shows `--` instead of a blank in the previous-year column.
+- Each time the web app opens, it checks every bill in the background and fixes any such data
+  the Java program has written since (clients open on a computer are skipped). The same check
+  is available as Utility ▸ *Check bills for the desktop version*.
+- Amounts are saved without a leading `+`, which older Java runtimes cannot read.
 
 ## Development
 
@@ -126,6 +139,6 @@ this repo as `../Utility-Soft`):
 
 ```
 compat/build-java.sh
-npx playwright test e2e/compat-build.spec.ts && python3 compat/check_web_to_java.py
+npx playwright test e2e/compat-build.spec.ts e2e/compat-repair.spec.ts && python3 compat/check_web_to_java.py
 python3 compat/build_java_data.py && npx playwright test e2e/compat-read.spec.ts
 ```

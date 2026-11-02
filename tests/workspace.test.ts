@@ -125,6 +125,32 @@ describe('workspace on the Java sample data', () => {
     expect((await ws.clients('07-08'))[0].serial).toBe('1');
   });
 
+  it('keeps every year of a bill openable by the Java program', async () => {
+    await ws.addNextYear();
+    await ws.copyClients('06-07', '07-08', ['RISHABH']);
+    // Last year gets a heading row without an amount, after next year already has it.
+    await ws.writeBill('06-07', 'RISHABH', 'Audit', 'PREM CHAND', [{ desc: 'pooja', amount: '' }]);
+    expect(raw(join(root, 'data/bills/07-08/RISHABH/Audit/PREM CHAND.txt'))).toEqual(['pooja ,0']);
+    expect(await ws.readBill('07-08', 'RISHABH', 'Audit', 'PREM CHAND')).toEqual([{ desc: 'pooja', amount: '0' }]);
+    // Saving 07-08 keeps the padding; giving 06-07 an amount again lets it go.
+    await ws.writeBill('07-08', 'RISHABH', 'Audit', 'PREM CHAND', [{ desc: 'pooja', amount: '5' }]);
+    expect(raw(join(root, 'data/bills/07-08/RISHABH/Audit/PREM CHAND.txt'))).toEqual(['pooja ,5']);
+    await ws.writeBill('06-07', 'RISHABH', 'Audit', 'PREM CHAND', [{ desc: 'pooja', amount: '3' }]);
+    expect(raw(join(root, 'data/bills/07-08/RISHABH/Audit/PREM CHAND.txt'))).toEqual(['pooja,5']);
+  });
+
+  it('finds and fixes bills the Java program could not open', async () => {
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const { encodeCipherLines } = await import('../src/core/codec');
+    const d = join(root, 'data/bills/07-08/RISHABH/Audit');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(root, 'data/bills/06-07/RISHABH/Audit/PREM CHAND.txt'), encodeCipherLines(['pooja,']));
+    writeFileSync(join(d, 'PREM CHAND.txt'), encodeCipherLines(['pooja,0', 'Fee,10']));
+    expect(await ws.protectAll()).toEqual({ checked: 2, fixed: 1 });
+    expect(raw(join(d, 'PREM CHAND.txt'))).toEqual(['pooja ,0', 'Fee,10']);
+    expect(await ws.protectAll()).toEqual({ checked: 2, fixed: 0 });
+  });
+
   it('adds a bill type everywhere', async () => {
     await ws.addBillType('GST');
     expect((await ws.billTypes()).map((t) => t.tab)).toEqual(['Audit', 'Vat', 'Tax', 'Others', 'GST']);

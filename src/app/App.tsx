@@ -10,6 +10,19 @@ import { autoBackup } from './utility';
 import { loadPrefs } from './folders';
 import { BusyOverlay, Toasts, attempt, confirmDialog, toast } from './ui';
 
+/**
+ * Quietly fixes bills that the desktop (Java) version could not open — it can
+ * write such data itself at any time. See protectForJava in core/bill.ts.
+ */
+function checkForDesktop(s: Session) {
+  s.ws
+    .protectAll(undefined, { skipOpen: true })
+    .then((r) => {
+      if (r.fixed) toast(`Prepared ${r.fixed} bill${r.fixed === 1 ? '' : 's'} so the desktop version can open ${r.fixed === 1 ? 'it' : 'them'}.`, 'info');
+    })
+    .catch((e) => console.warn('Desktop check skipped:', e));
+}
+
 type Stage =
   | { kind: 'welcome' }
   | { kind: 'login'; program: FsDir }
@@ -53,7 +66,9 @@ export function App() {
       setStage({ kind: 'data', program, path: r.path, reason: r.reason });
       return;
     }
-    setStage({ kind: 'main', s: await openSession(program, r.data, r.label) });
+    const s = await openSession(program, r.data, r.label);
+    setStage({ kind: 'main', s });
+    checkForDesktop(s);
   };
 
   const openClient = (s: Session, y: string, client: Client) =>
@@ -162,7 +177,13 @@ export function App() {
           path={stage.path}
           reason={stage.reason}
           onBack={() => setStage({ kind: 'welcome' })}
-          onChosen={(data, label) => attempt(async () => setStage({ kind: 'main', s: await openSession(stage.program, data, label) }))}
+          onChosen={(data, label) =>
+            attempt(async () => {
+              const s = await openSession(stage.program, data, label);
+              setStage({ kind: 'main', s });
+              checkForDesktop(s);
+            })
+          }
         />
       );
       break;

@@ -98,6 +98,11 @@ class JavaApp:
         self.cmd(f'mouse {xy}')
         self.wait()
 
+    def show_options(self):
+        """Shows the bill editor's button panel (it appears while the mouse is over 'OPTIONS')."""
+        if 'not found' not in self.cmd('locate OPTIONS'):
+            self.mouse_click('OPTIONS')
+
     def bills_button(self, text: str):
         """Buttons of the bill editor are on a panel that appears when the mouse is over 'OPTIONS'."""
         if 'not found' in self.cmd(f"locate {text.replace(' ', '_')}"):

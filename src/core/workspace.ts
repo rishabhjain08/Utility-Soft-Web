@@ -13,10 +13,15 @@ import {
 import {
   FsDir, copyTree, ensureDir, findEntry, listDirs, listFiles, removeEntry, tryDir, tryRead, walk, writeFile,
 } from './fs';
-import { BillRow, HistoryColumn, historyColumns, linesFromRows, mergeHistory, rowsFromLines } from './bill';
+import { BillRow, HistoryColumn, historyColumns, linesFromRows, mergeHistory, protectForJava, rowsFromLines } from './bill';
 import { SerialEntry, planInsert, planRemove } from './serial';
 import { compareIgnoreCase, sameName, sortNames, sortStrings } from './sort';
 import { isYear, nextYear, previousYear, previousYears } from './years';
+
+export interface CheckResult {
+  checked: number;
+  fixed: number;
+}
 
 export const BILLS = 'bills';
 export const LOCKS = 'activelocation.txt';
@@ -229,6 +234,7 @@ export class Workspace {
       await this.moveBills(src, dest);
       await this.deleteClient(year, oldName);
       await writeFile(dest, BILLNO, encodeCipherValue(billNo));
+      await this.protectClient(year, existing);
       await this.touch();
       return existing;
     }
@@ -252,6 +258,7 @@ export class Workspace {
     for (const t of await this.billTypes()) await ensureDir(final, t.folder);
     await writeFile(final, SERIAL, encodeCipherValue(plan.serial));
     await writeFile(final, BILLNO, encodeCipherValue(billNo));
+    await this.protectClient(year, newName);
     await this.touch();
     return newName;
   }
@@ -291,8 +298,7 @@ export class Workspace {
   }
 
   async writeBill(year: string, client: string, folder: string, bill: string, rows: BillRow[]): Promise<void> {
-    const d = await this.typeDir(year, client, folder, true);
-    await writeFile(d!, `${bill}.txt`, encodeCipherLines(linesFromRows(rows, year)));
+    await this.saveLines(year, client, folder, bill, linesFromRows(rows, year));
   }
 
   /** Amounts of the same bill in the three previous years. */
@@ -308,8 +314,7 @@ export class Workspace {
     const existing = await this.bills(year, client, folder);
     if (existing.some((b) => sameName(b, name))) throw new UserError('This bill name already exists.');
     const sources = await this.historySources(year, client, folder, name);
-    const d = await this.typeDir(year, client, folder, true);
-    await writeFile(d!, `${name}.txt`, encodeCipherLines(mergeHistory(sources)));
+    await this.saveLines(year, client, folder, name, mergeHistory(sources));
     return name;
   }
 
@@ -340,12 +345,83 @@ export class Workspace {
       await d.write(`${name}.txt`, data);
       await d.remove(`${oldName}.txt`);
     }
+    await this.protectBill(year, client, folder, name);
+    await this.protectFollowing(year, client, folder, name);
     return name;
   }
 
   async deleteBill(year: string, client: string, folder: string, bill: string): Promise<void> {
     const d = await this.typeDir(year, client, folder);
     if (d) await d.remove(`${bill}.txt`);
+  }
+
+  // ---------- keeping bills openable by the Java program ----------
+
+  private async previousLines(year: string, client: string, folder: string, bill: string): Promise<(string[] | null)[]> {
+    return Promise.all(previousYears(year, 3).map((y) => this.readBillLines(y, client, folder, bill)));
+  }
+
+  /** `lines` adjusted so the Java program can open the bill (see protectForJava). */
+  private async protectLines(year: string, client: string, folder: string, bill: string, lines: string[]): Promise<string[]> {
+    return protectForJava(lines, await this.previousLines(year, client, folder, bill));
+  }
+
+  /** Writes a bill (adjusted for the Java program) and re-checks the next three years' copies. */
+  private async saveLines(year: string, client: string, folder: string, bill: string, lines: string[]): Promise<void> {
+    const d = await this.typeDir(year, client, folder, true);
+    await writeFile(d!, `${bill}.txt`, encodeCipherLines(await this.protectLines(year, client, folder, bill, lines)));
+    await this.protectFollowing(year, client, folder, bill);
+  }
+
+  /** Re-checks one existing bill file; returns true if it had to be changed. */
+  async protectBill(year: string, client: string, folder: string, bill: string): Promise<boolean> {
+    const lines = await this.readBillLines(year, client, folder, bill);
+    if (!lines) return false;
+    const safe = protectForJava(lines, await this.previousLines(year, client, folder, bill));
+    if (safe.every((l, i) => l === lines[i])) return false;
+    const d = await this.typeDir(year, client, folder);
+    await writeFile(d!, `${bill}.txt`, encodeCipherLines(safe));
+    return true;
+  }
+
+  /** The next three years' copies of a bill treat this one as history. */
+  private async protectFollowing(year: string, client: string, folder: string, bill: string): Promise<void> {
+    let y: string | null = year;
+    for (let i = 0; i < 3; i++) {
+      y = y ? nextYear(y) : null;
+      if (!y) return;
+      await this.protectBill(y, client, folder, bill);
+    }
+  }
+
+  private async protectClient(year: string, client: string): Promise<void> {
+    for (const t of await this.billTypes()) {
+      for (const b of await this.bills(year, client, t.folder)) {
+        await this.protectBill(year, client, t.folder, b);
+        await this.protectFollowing(year, client, t.folder, b);
+      }
+    }
+  }
+
+  /** Checks every bill of every year (oldest first) and fixes those the Java program could not open. */
+  async protectAll(onProgress?: (r: CheckResult) => void, opts: { skipOpen?: boolean } = {}): Promise<CheckResult> {
+    const r: CheckResult = { checked: 0, fixed: 0 };
+    const types = await this.billTypes();
+    // Clients open on a computer are left alone (their bills are about to be saved anyway).
+    const open = opts.skipOpen ? await this.lockLines() : [];
+    for (const year of await this.years()) {
+      for (const client of await this.clientNames(year)) {
+        if (open.some((l) => sameName(l, `${year},${client}`))) continue;
+        for (const t of types) {
+          for (const b of await this.bills(year, client, t.folder)) {
+            if (await this.protectBill(year, client, t.folder, b)) r.fixed++;
+            r.checked++;
+            onProgress?.(r);
+          }
+        }
+      }
+    }
+    return r;
   }
 
   // ---------- copying clients between years ----------
@@ -372,7 +448,8 @@ export class Workspace {
           const lines = await this.readBillLines(y, name, t.folder, b);
           if (lines) sources.push(lines);
         }
-        await writeFile(destType, `${b}.txt`, encodeCipherLines(mergeHistory(sources)));
+        await writeFile(destType, `${b}.txt`, encodeCipherLines(await this.protectLines(to, name, t.folder, b, mergeHistory(sources))));
+        await this.protectFollowing(to, name, t.folder, b);
       }
     }
     if (src) {

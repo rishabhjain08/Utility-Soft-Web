@@ -4,7 +4,7 @@ import {
 } from '../src/core/codec';
 import { letterheadFromImpinfo, parseBillTypes, dropdownItems, isRelativePath } from '../src/core/config';
 import { planInsert, planRemove, SerialEntry } from '../src/core/serial';
-import { historyColumns, linesFromRows, mergeHistory, rowsFromLines, isValidAmount, rowNumbers } from '../src/core/bill';
+import { historyColumns, linesFromRows, mergeHistory, protectForJava, rowsFromLines, isValidAmount, rowNumbers } from '../src/core/bill';
 import { amountInWords, formatAmount, groupIndian } from '../src/core/money';
 import { compareIgnoreCase, sortStrings } from '../src/core/sort';
 import { financialYearOf, nextYear, previousYear, previousYears } from '../src/core/years';
@@ -169,7 +169,7 @@ describe('bills', () => {
     const y2 = ['Fee AY ##,900', 'Audit fee,300', 'New Name,New'];
     const y3 = ['audit FEE,1', 'Old item 04-05,5'];
     expect(mergeHistory([y1, y2, y3])).toEqual([
-      'SHRI A,', 'Fee AY ##,0', 'Expenses,0', 'New Name,New', 'SMT B,', 'Expenses,0', 'Audit fee,0', 'Old item 04-05,0',
+      'SHRI A,0', 'Fee AY ##,0', 'Expenses,0', 'New Name,New', 'SMT B,0', 'Expenses,0', 'Audit fee,0', 'Old item 04-05,0',
     ]);
     // Older literal years match ignoring the year.
     expect(mergeHistory([['Item 05-06,1'], ['Item 04-05,2']])).toEqual(['Item 05-06,0']);
@@ -184,6 +184,36 @@ describe('bills', () => {
     expect(cols[0].values).toEqual(['90', '7,3', '7,3', '--']);
     expect(cols[0].total).toBe(100);
     expect(cols[1].values).toEqual(['--', '--', '--', '--']);
+  });
+});
+
+describe('keeping bills openable by the Java program', () => {
+  it('pads rows whose only earlier amount is blank or not a number', () => {
+    const prev = ['SMT. KAMLA,', 'Expenses,500', 'New Name,New', 'Fee,'];
+    expect(protectForJava(['SMT. KAMLA,600', 'expenses,0', 'new name,1', 'New Name,New', 'Fee,10', 'Other,'], [prev])).toEqual([
+      'SMT. KAMLA ,600', 'expenses,0', 'new name ,1', 'New Name,New', 'Fee ,10', 'Other,',
+    ]);
+  });
+
+  it('is safe when a later blank follows a number, and checks all three years', () => {
+    expect(protectForJava(['A,1'], [['A,5', 'A,']])).toEqual(['A,1']); // "5" only
+    expect(protectForJava(['A,1'], [['A,', 'A,5']])).toEqual(['A,1']); // ",5" is parsed safely by Java
+    expect(protectForJava(['A,1'], [null, ['B,2'], ['a,']])).toEqual(['A ,1']);
+  });
+
+  it('adds more spaces when needed, and removes padding that is no longer needed', () => {
+    expect(protectForJava(['A,1'], [['A,'], ['A ,']])).toEqual(['A  ,1']);
+    expect(protectForJava(['A ,1'], [['A,3']])).toEqual(['A,1']);
+    expect(rowsFromLines(['A  ,1'], '06-07')).toEqual([{ desc: 'A', amount: '1' }]);
+  });
+
+  it('matches earlier years ignoring the padding', () => {
+    const cols = historyColumns(rowsFromLines(['A ,1'], '06-07'), '06-07', [{ year: '05-06', lines: ['a,7'] }]);
+    expect(cols[0].values).toEqual(['7']);
+  });
+
+  it('saves amounts without a leading plus', () => {
+    expect(linesFromRows([{ desc: 'A', amount: '+500' }], '06-07')).toEqual(['A,500']);
   });
 });
 

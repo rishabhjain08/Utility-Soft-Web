@@ -36,7 +36,8 @@ export function collapseYear(desc: string, year: string): string {
 export function rowsFromLines(lines: string[], year: string): BillRow[] {
   return lines.map((l) => {
     const { desc, amount } = parseBillLine(l);
-    return { desc: expandYear(desc, year), amount };
+    // Trailing spaces may have been added for the Java program (see protectForJava).
+    return { desc: expandYear(desc.trimEnd(), year), amount };
   });
 }
 
@@ -48,8 +49,9 @@ export function linesFromRows(rows: BillRow[], year: string): string[] {
       out.push(`${SEPARATOR},${SEPARATOR_AMOUNT}`);
       continue;
     }
-    const desc = sanitize(r.desc);
-    const amount = sanitize(r.amount).trim();
+    const desc = sanitize(r.desc).trimEnd();
+    // Older Java runtimes reject a leading "+".
+    const amount = sanitize(r.amount).trim().replace(/^\+/, '');
     if (desc === '' && amount === '') continue;
     out.push(`${collapseYear(desc, year)},${amount}`);
   }
@@ -82,7 +84,7 @@ export function normalizeAmount(s: string): string {
 
 /** Key used to match rows across years: description with year placeholder, case-insensitive. */
 export function matchKey(desc: string, year: string): string {
-  return collapseYear(desc, year).toLowerCase();
+  return collapseYear(desc.trimEnd(), year).toLowerCase();
 }
 
 /** Same key with a trailing "NN-NN" year removed, for matching older bills that stored a literal year. */
@@ -93,8 +95,8 @@ function looseKey(key: string): string {
 /**
  * Builds a new bill from the same bill in earlier years (most recent first):
  * every row of the most recent bill, then rows from older bills whose
- * description is not already present. Amounts are reset to 0 (rows that had
- * no amount, like a person's name, keep none).
+ * description is not already present. Amounts are reset to 0, as the Java
+ * program does.
  * Input rows are raw stored lines (with "##").
  */
 export function mergeHistory(sources: string[][]): string[] {
@@ -103,18 +105,17 @@ export function mergeHistory(sources: string[][]): string[] {
   sources.forEach((lines, idx) => {
     const before = new Set(seen);
     for (const line of lines) {
-      const { desc, amount } = parseBillLine(line);
+      const { desc } = parseBillLine(line);
       if (desc.trim() === SEPARATOR) {
         if (idx === 0) out.push(`${SEPARATOR},${SEPARATOR_AMOUNT}`);
         continue;
       }
       if (desc.trim() === '') continue;
-      const key = desc.toLowerCase();
+      const key = desc.trimEnd().toLowerCase();
       if (idx > 0 && (before.has(key) || before.has(looseKey(key)))) continue;
       seen.add(key);
       seen.add(looseKey(key));
-      // Amounts restart at 0; heading rows without an amount stay without one.
-      out.push(`${desc},${amount.trim() === '' ? '' : '0'}`);
+      out.push(`${desc.trimEnd()},0`);
     }
   });
   return out;
@@ -142,7 +143,7 @@ export function historyColumns(rows: BillRow[], year: string, history: { year: s
     const found: (string[] | null)[] = rows.map(() => null);
     for (const line of lines ?? []) {
       const { desc, amount } = parseBillLine(line);
-      const k = desc.toLowerCase();
+      const k = desc.trimEnd().toLowerCase();
       rows.forEach((r, i) => {
         if (isSeparator(r) || keys[i] !== k) return;
         if (found[i] === null) found[i] = [amount];
@@ -165,4 +166,68 @@ export function billTotal(rows: BillRow[]): number {
 export function rowNumbers(rows: BillRow[]): string[] {
   let n = 0;
   return rows.map((r) => (isSeparator(r) ? '' : String(++n)));
+}
+
+// ---------- keeping bills openable by the Java program ----------
+//
+// When the Java program opens a bill it collects, for every row, the amounts of
+// the rows with the same text (ignoring case) in the previous three years'
+// copies of the bill. If exactly one such amount is found, or several of which
+// only the first is not blank, it is read with Integer.parseInt without any
+// error handling, and a blank or non-numeric value makes the bill impossible
+// to open. Typical cause: a row typed without an amount (such as a person's
+// name) last year, and the same row this year. Adding trailing spaces to this
+// year's row makes the texts differ for Java (it compares them exactly apart
+// from case) while nothing visible changes.
+
+function javaInt(v: string): boolean {
+  if (!/^-?\d+$/.test(v)) return false;
+  const n = Number(v);
+  return n >= INT_MIN && n <= INT_MAX;
+}
+
+/** The value Java collects for a row with text `desc` from one earlier year's lines. */
+function javaHistoryValue(desc: string, lines: string[]): string | null {
+  let v: string | null = null;
+  for (const line of lines) {
+    const i = line.lastIndexOf(',');
+    if (i === -1) continue;
+    if (!sameText(line.slice(0, i), desc)) continue;
+    const amount = line.slice(i + 1);
+    if (v === null) v = amount;
+    else if (amount !== '') v += `,${amount}`;
+  }
+  return v;
+}
+
+function sameText(a: string, b: string): boolean {
+  return a.length === b.length && a.toLowerCase() === b.toLowerCase();
+}
+
+function crashesJava(desc: string, previous: (string[] | null)[]): boolean {
+  if (desc === SEPARATOR) return false;
+  return previous.some((lines) => {
+    const v = lines ? javaHistoryValue(desc, lines) : null;
+    return v !== null && !v.includes(',') && !javaInt(v);
+  });
+}
+
+/**
+ * Returns the bill lines with trailing spaces added to any row text that would
+ * stop the Java program from opening the bill, given the same bill's lines in
+ * the previous three years (most recent first).
+ */
+export function protectForJava(lines: string[], previous: (string[] | null)[]): string[] {
+  return lines.map((line) => {
+    const i = line.lastIndexOf(',');
+    if (i === -1) return line;
+    const base = line.slice(0, i).trimEnd();
+    const amount = line.slice(i + 1);
+    let desc = line.slice(0, i);
+    if (!crashesJava(desc, previous) && (desc === base || crashesJava(base, previous))) return line;
+    // Prefer the plain text; otherwise the fewest trailing spaces that are safe.
+    desc = base;
+    while (crashesJava(desc, previous)) desc += ' ';
+    return `${desc},${amount}`;
+  });
 }
