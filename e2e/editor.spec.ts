@@ -1,7 +1,7 @@
 import { test, expect, Page } from '@playwright/test';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cipherLines, expectClients, gridRows, login, programCopy, start, waitSaved } from './helpers';
+import { cipherLines, expectClients, gridRows, login, printed, programCopy, start, waitSaved } from './helpers';
 import { encodeCipherLines, encodeCipherValue } from '../src/core/codec';
 
 /** Adds year 05-06 with RISHABH's bill so that history and new-bill merging can be checked. */
@@ -119,22 +119,23 @@ test('bill editor journey', async ({ page }) => {
     'Expenses|20',
   ]);
 
-  // Print this bill: preview shows both copies with totals and words.
+  // Print this bill: Chrome's print dialog gets both copies with totals and words.
   await page.keyboard.press('Control+p');
   await expect(page.getByLabel('Date to be printed')).toHaveValue(/^\d\d\.\d\d\.\d{4}$/);
   await page.getByLabel('Date to be printed').fill('01.11.2026');
-  await page.getByRole('button', { name: 'Preview' }).click();
-  const preview = page.getByRole('dialog', { name: /Print preview/ });
-  await expect(preview.locator('.bill-copy')).toHaveCount(2);
-  const copy = preview.locator('.bill-copy').first();
+  await page.getByRole('button', { name: 'Print…' }).click();
+  await expect(printed(page).locator('.bill-copy')).toHaveCount(2);
+  const copy = printed(page).locator('.bill-copy').first();
   await expect(copy.locator('.bc-title')).toHaveText('KAMLA');
   await expect(copy.locator('.bc-meta')).toContainText('S.No.: 2');
   await expect(copy.locator('.bc-words')).toHaveText('(Rs. One Thousand Five Hundred and Twenty only.)');
   await expect(copy.locator('.bc-sum')).toHaveText('1,520/-');
   await expect(copy.locator('.bc-sub')).toHaveText(['1,500/-', '', '20/-']);
   await expect(copy).toContainText('Date : 01.11.2026');
-  await page.screenshot({ path: 'test-results/editor-print-preview.png' });
-  await preview.getByRole('button', { name: 'Close', exact: true }).last().click();
+  expect(await page.evaluate(() => (window as unknown as { __prints: number }).__prints)).toBe(1);
+  // Only the printout went to the printer; the screen is back to normal.
+  await expect(page.locator('#print-root')).toBeEmpty();
+  await expect(page.locator('.print-stage')).toHaveCount(0);
 
   // Rename and delete through Bill utility.
   await page.getByRole('button', { name: 'Bill utility…' }).click();

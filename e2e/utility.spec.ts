@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { cipherLines, cipherValue, clientRows, expectClients, login, programCopy, start } from './helpers';
+import { cipherLines, cipherValue, clientRows, expectClients, login, printed, programCopy, start } from './helpers';
 import { encodeCipherLines } from '../src/core/codec';
 
 test('years: add next year, copy clients forward (fresh and overwrite), print index', async ({ page }) => {
@@ -56,9 +56,8 @@ test('years: add next year, copy clients forward (fresh and overwrite), print in
 
   // Index sheet.
   await page.getByRole('button', { name: 'Print index' }).click();
-  const preview = page.getByRole('dialog', { name: /Print preview/ });
-  await expect(preview.locator('.ix-table tbody tr')).toHaveCount(2);
-  await expect(preview.locator('.ix-table tbody tr').first()).toContainText('PREM');
+  await expect(printed(page).locator('.ix-table tbody tr')).toHaveCount(2);
+  await expect(printed(page).locator('.ix-table tbody tr').first()).toContainText('PREM');
 });
 
 test('setup: add a tab, edit drop-down lists, letterhead', async ({ page }) => {
@@ -113,7 +112,7 @@ test('setup: add a tab, edit drop-down lists, letterhead', async ({ page }) => {
   const info = cipherLines(join(dir, 'impinfo.txt'));
   expect(info.slice(1, 4)).toEqual(['~For JAIN & CO.%~Chartered Accountants%', '~12, Gandhi Road%~New Delhi%', '%$INDEX OF BILLS ##%$%$%$']);
   await page.getByRole('button', { name: 'Print index' }).click();
-  await expect(page.locator('.ix-title')).toHaveText(['INDEX OF BILLS 06-07']);
+  await expect(printed(page).locator('.ix-title')).toHaveText(['INDEX OF BILLS 06-07']);
 });
 
 test('data location, backup now, auto-backup on exit', async ({ page }) => {

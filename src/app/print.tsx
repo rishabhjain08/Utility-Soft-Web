@@ -8,7 +8,6 @@ import { BillRow, isSeparator } from '../core/bill';
 import { Letterhead } from '../core/config';
 import { amountInWords, formatAmount, groupIndian } from '../core/money';
 import { amountValue } from '../core/bill';
-import { Modal } from './ui';
 
 export interface PrintableBill {
   billName: string;
@@ -182,65 +181,55 @@ function BillPages({ bills, letterhead, date, onReady }: { bills: PrintableBill[
 
 export type PrintJob = { kind: 'bills'; bills: PrintableBill[]; letterhead: Letterhead | null; date: string } | { kind: 'index'; sheet: IndexSheet };
 
-export function PrintPreview({ job, onClose }: { job: PrintJob; onClose: () => void }) {
-  const [ready, setReady] = useState(job.kind === 'index');
-  const count = job.kind === 'bills' ? job.bills.length : job.sheet.rows.length;
-  const doPrint = () => {
-    const pages = document.querySelector('.print-pages');
-    if (!pages) return;
-    // Print from a dedicated root so only the pages are printed.
-    const root = document.getElementById('print-root')!;
-    root.innerHTML = '';
-    root.appendChild(pages.cloneNode(true));
-    document.body.classList.add('printing');
-    window.print();
-    document.body.classList.remove('printing');
-    root.innerHTML = '';
-  };
+/** Lays the pages out off screen (bills need measuring) and reports when ready. */
+function PrintStage({ job, onReady }: { job: PrintJob; onReady: () => void }) {
+  useLayoutEffect(() => {
+    if (job.kind === 'index') onReady();
+  }, []);
   return (
-    <Modal
-      title={job.kind === 'bills' ? `Print preview — ${count} bill${count === 1 ? '' : 's'}` : 'Print preview — index sheet'}
-      onClose={onClose}
-      wide
-      class="preview-modal"
-      footer={
-        <>
-          <span class="hint grow">
-            {job.kind === 'bills' ? 'Each bill prints twice (original and duplicate). ' : ''}Choose the printer or “Save as PDF” in the next window.
-          </span>
-          <button onClick={onClose}>Close</button>
-          <button class="primary" disabled={!ready || count === 0} autoFocus onClick={doPrint}>
-            Print…
-          </button>
-        </>
-      }
-    >
-      {count === 0 ? (
-        <p class="hint">There is nothing to print.</p>
+    <div class="print-pages">
+      {job.kind === 'bills' ? (
+        <BillPages bills={job.bills} letterhead={job.letterhead} date={job.date} onReady={onReady} />
       ) : (
-        <div class="print-pages">
-          {job.kind === 'bills' ? (
-            <BillPages bills={job.bills} letterhead={job.letterhead} date={job.date} onReady={() => setReady(true)} />
-          ) : (
-            <div class="page flow">
-              <IndexSheetView sheet={job.sheet} />
-            </div>
-          )}
+        <div class="page flow">
+          <IndexSheetView sheet={job.sheet} />
         </div>
       )}
-    </Modal>
+    </div>
   );
 }
 
-export function showPrintPreview(job: PrintJob): Promise<void> {
+/**
+ * Prints through Chrome's own print dialog (with its preview, printer choice and
+ * "Save as PDF"). Only the prepared pages are printed.
+ */
+export function printJob(job: PrintJob): Promise<void> {
   return new Promise((resolve) => {
-    const host = document.createElement('div');
-    document.body.appendChild(host);
-    const close = () => {
-      render(null, host);
-      host.remove();
-      resolve();
+    const stage = document.createElement('div');
+    stage.className = 'print-stage';
+    document.body.appendChild(stage);
+    let started = false;
+    const ready = () => {
+      if (started) return;
+      started = true;
+      // Wait one frame so the measured layout is in the DOM.
+      requestAnimationFrame(() => {
+        const root = document.getElementById('print-root')!;
+        const pages = stage.querySelector('.print-pages');
+        root.innerHTML = '';
+        if (pages) root.appendChild(pages.cloneNode(true));
+        render(null, stage);
+        stage.remove();
+        document.body.classList.add('printing');
+        try {
+          window.print();
+        } finally {
+          document.body.classList.remove('printing');
+          root.innerHTML = '';
+          resolve();
+        }
+      });
     };
-    render(<PrintPreview job={job} onClose={close} />, host);
+    render(<PrintStage job={job} onReady={ready} />, stage);
   });
 }

@@ -3,19 +3,13 @@
 import { test, expect, Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { expectClients, login, programCopy, start } from './helpers';
+import { expectClients, login, printed, programCopy, start } from './helpers';
 import { encodeCipherLines } from '../src/core/codec';
 
+/** Puts the last printout back into the print root and renders it with Chrome's print engine. */
 async function printToPdf(page: Page, file: string): Promise<number> {
-  // Keep what the app puts into the print root when it calls window.print().
   await page.evaluate(() => {
-    (window as unknown as { print: () => void }).print = () => {
-      (window as unknown as { __printed: string }).__printed = document.getElementById('print-root')!.innerHTML;
-    };
-  });
-  await page.getByRole('button', { name: 'Print…' }).click();
-  await page.evaluate(() => {
-    document.getElementById('print-root')!.innerHTML = (window as unknown as { __printed: string }).__printed;
+    document.getElementById('print-root')!.innerHTML = document.getElementById('printed')!.innerHTML;
     document.body.classList.add('printing');
   });
   await page.emulateMedia({ media: 'print' });
@@ -53,13 +47,13 @@ test('bills and index print on A4 pages', async ({ page }) => {
   await page.keyboard.press('Control+a');
   await page.keyboard.press('Control+p');
   await page.getByLabel('Date to be printed').fill('01.11.2026');
-  await page.getByRole('button', { name: 'Preview' }).click();
-  await expect(page.locator('.print-pages .bill-copy')).toHaveCount(4);
+  await page.getByRole('button', { name: 'Print…' }).click();
+  await expect(printed(page).locator('.bill-copy')).toHaveCount(4);
   const bills = await printToPdf(page, 'test-results/print-bills.pdf');
   // Short bill: both copies on one page. Long bill: one page per copy.
   expect(bills).toBe(3);
-  await page.getByRole('button', { name: 'Close', exact: true }).last().click();
 
   await page.getByRole('button', { name: 'Print index' }).click();
+  await expect(printed(page).locator('.ix-table')).toBeVisible();
   expect(await printToPdf(page, 'test-results/print-index.pdf')).toBe(1);
 });

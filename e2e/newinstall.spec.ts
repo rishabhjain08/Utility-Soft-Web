@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { cipherLines, cipherValue, expectClients, gridRows, start, waitSaved } from './helpers';
+import { cipherLines, cipherValue, expectClients, gridRows, printed, start, waitSaved } from './helpers';
 
 test('a new installation in an empty folder, from first year to printed bill', async ({ page }) => {
   const picker = await start(page);
@@ -52,9 +52,9 @@ test('a new installation in an empty folder, from first year to printed bill', a
   await expect.poll(() => gridRows(page)).toEqual(['Fee for Tax Audit for the Assessment Year 26-27|25000', 'Expenses|1500']);
 
   await page.keyboard.press('Control+p');
-  await page.getByRole('button', { name: 'Preview' }).click();
-  await expect(page.locator('.bill-copy').first().locator('.bc-words')).toHaveText('(Rs. Twenty Six Thousand Five Hundred only.)');
-  await expect(page.locator('.bill-copy').first().locator('.bc-firm')).toContainText('For R. K. & Co.');
+  await page.getByRole('button', { name: 'Print…' }).click();
+  await expect(printed(page).locator('.bill-copy').first().locator('.bc-words')).toHaveText('(Rs. Twenty Six Thousand Five Hundred only.)');
+  await expect(printed(page).locator('.bill-copy').first().locator('.bc-firm')).toContainText('For R. K. & Co.');
 
   // Files exactly as the Java program lays them out.
   expect(readdirSync(dir).sort()).toEqual(['backupto.txt', 'data', 'ddown.txt', 'impinfo.txt', 'loaddatafrom.txt', 'pass.txt']);

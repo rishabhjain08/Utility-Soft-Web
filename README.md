@@ -40,7 +40,7 @@ An empty folder can be set up as a new installation.
 | “File is already open on a computer” (`activelocation.txt`) | Same lock file; can *Open anyway* if a lock was left behind |
 | Utility: Copy Data, Add Next Year, Print the Bills, Print the Menu, BackUp Data, Auto BackUp to, Load Data, Add New Tab, Edit Drop Down List, Exit | Utility dialog with the same items (“Print the Menu” is *Print the index sheet*) |
 | Auto-backup question on exit (`dd.MM.yyyy+h.m.sAM` folders) | Same, same folder names |
-| Print preview and printing (each bill twice per page) | Print preview, then Chrome's print dialog (printer or *Save as PDF*) |
+| Print preview and printing (each bill twice per page) | Chrome's own print dialog, with its preview, printer choice and *Save as PDF* |
 | List refreshes when another computer changes it | Same, both ways (web ↔ Java) |
 
 ### Keyboard

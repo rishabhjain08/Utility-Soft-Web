@@ -1,12 +1,12 @@
 import { BillType } from '../core/config';
 import { Client, dateString } from '../core/workspace';
 import { Session } from './session';
-import { PrintableBill, showPrintPreview } from './print';
-import { busy, promptDialog } from './ui';
+import { PrintableBill, printJob } from './print';
+import { busy, promptDialog, toast } from './ui';
 
 /** Asks for the date printed on bills (Java: "Change Date"); null when cancelled. */
 export function askPrintDate(): Promise<string | null> {
-  return promptDialog({ title: 'Print bills', label: 'Date to be printed', value: dateString(new Date()), ok: 'Preview' });
+  return promptDialog({ title: 'Print bills', label: 'Date to be printed', value: dateString(new Date()), ok: 'Print…' });
 }
 
 /** Bills of the given clients (all bill types, or only `types`, or only one bill). */
@@ -35,12 +35,14 @@ export async function printBills(s: Session, year: string, clients: Client[], on
   if (date === null) return;
   const bills = await busy('Preparing bills…', () => collectBills(s, year, clients, only));
   if (!bills) return;
-  await showPrintPreview({ kind: 'bills', bills, letterhead: s.letterhead, date });
+  if (bills.length === 0) return toast('There are no bills to print.', 'info');
+  await printJob({ kind: 'bills', bills, letterhead: s.letterhead, date });
 }
 
 export async function printIndex(s: Session, year: string): Promise<void> {
   const clients = await busy('Preparing index…', () => s.ws.clients(year));
   if (!clients) return;
   const titles = (s.letterhead?.indexTitles ?? []).map((t) => t.split('##').join(year));
-  await showPrintPreview({ kind: 'index', sheet: { titles, rows: clients.map((c) => ({ serial: c.serial, name: c.name, billNo: c.billNo })) } });
+  if (clients.length === 0) return toast('There are no clients in this year to print.', 'info');
+  await printJob({ kind: 'index', sheet: { titles, rows: clients.map((c) => ({ serial: c.serial, name: c.name, billNo: c.billNo })) } });
 }

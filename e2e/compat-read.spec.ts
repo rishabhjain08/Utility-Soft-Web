@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 import { cpSync, existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expectClients, gridRows, login, start } from './helpers';
+import { expectClients, gridRows, login, printed, start } from './helpers';
 
 const JAVA_DATA = join(import.meta.dirname, '..', '.tmp', 'compat-java');
 
@@ -30,11 +30,10 @@ test('reads data written by the Java program', async ({ page }) => {
 
   // Its printout groups the two people.
   await page.keyboard.press('Control+p');
-  await page.getByRole('button', { name: 'Preview' }).click();
-  const copy = page.locator('.bill-copy').first();
+  await page.getByRole('button', { name: 'Print…' }).click();
+  const copy = printed(page).locator('.bill-copy').first();
   await expect(copy.locator('.bc-sub')).toHaveText(['', '750/-', '1,200/-']);
   await expect(copy.locator('.bc-words')).toHaveText('(Rs. One Thousand Nine Hundred and Fifty only.)');
-  await page.getByRole('button', { name: 'Close', exact: true }).last().click();
 
   // 07-08 copy made by Java: zero amounts ("New Name,0" is still a separator) and 06-07 alongside.
   await page.keyboard.press('Alt+ArrowRight');

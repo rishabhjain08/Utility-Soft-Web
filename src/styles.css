@@ -838,15 +838,12 @@ ul.suggest li.hi {
   }
 }
 
-/* ---------- print preview ---------- */
-.preview-modal {
-  width: 960px !important;
-  height: 100%;
-}
-.preview-modal .modal-body {
-  background: #c3ccc1;
-  padding: 20px;
-  flex: 1;
+/* ---------- printing ---------- */
+/* Pages are laid out here, off screen, before Chrome's print dialog opens. */
+.print-stage {
+  position: absolute;
+  left: -10000px;
+  top: 0;
 }
 .print-pages {
   display: flex;
