@@ -43,7 +43,7 @@ function groups(rows: BillRow[]): { groups: Group[]; total: number } {
   return { groups: out, total };
 }
 
-function BillCopy({ bill, letterhead, date }: { bill: PrintableBill; letterhead: Letterhead | null; date: string }) {
+export function BillCopy({ bill, letterhead, date }: { bill: PrintableBill; letterhead: Letterhead | null; date: string }) {
   const { groups: gs, total } = groups(bill.rows);
   const grouped = gs.length > 1;
   const name = letterhead?.firmName ?? [];
@@ -96,7 +96,7 @@ function BillCopy({ bill, letterhead, date }: { bill: PrintableBill; letterhead:
   );
 }
 
-function IndexSheetView({ sheet }: { sheet: IndexSheet }) {
+export function IndexSheetView({ sheet }: { sheet: IndexSheet }) {
   return (
     <div class="index-sheet">
       {sheet.titles

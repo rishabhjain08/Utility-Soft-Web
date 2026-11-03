@@ -28,7 +28,7 @@ export function UtilityDialog({ s, year, selection, onClose, onCopy, onNextYear,
   if (sub === 'dropdowns') return <DropdownDialog s={s} onClose={() => setSub(null)} onSaved={onClose} />;
   if (sub === 'letterhead')
     return (
-      <Modal title="Letterhead" onClose={() => setSub(null)} wide>
+      <Modal title="Letterhead" onClose={() => setSub(null)} class="letterhead-modal">
         <LetterheadForm
           program={s.program}
           initial={s.letterhead}

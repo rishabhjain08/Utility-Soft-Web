@@ -114,3 +114,38 @@ export function planRemove(entries: SerialEntry[], name: string): Map<string, st
   }
   return updates;
 }
+
+/**
+ * Serial changes for renaming `oldName` to `newName`. `entries` are the year's
+ * clients in sorted order, including `oldName`.
+ * - Renumbering (keep = false), as Java's Modify: the client is taken out of the
+ *   numbering and put back in under the new name.
+ * - Keeping the others' numbers (keep = true, Java's "late entry"): nobody else
+ *   changes. The client keeps its own S.No. if it stays in the same place in the
+ *   list, otherwise it gets a lettered one at its new place. (Java still moved
+ *   everyone after the old place down by one.)
+ */
+export function planRename(entries: SerialEntry[], oldName: string, newName: string, keep: boolean): InsertPlan {
+  const idx = entries.findIndex((e) => e.name === oldName);
+  const rest = entries.filter((e) => e.name !== oldName);
+  if (keep) {
+    if (idx !== -1 && rankOf(rest, newName) === idx) return { serial: entries[idx].serial, updates: new Map() };
+    return planInsert(rest, newName, true);
+  }
+  const removal = planRemove(entries, oldName);
+  const shifted = rest.map((e) => ({ name: e.name, serial: removal.get(e.name) ?? e.serial }));
+  const plan = planInsert(shifted, newName, false);
+  const updates = new Map<string, string>();
+  for (const e of shifted) {
+    const now = plan.updates.get(e.name) ?? e.serial;
+    if (now !== rest.find((r) => r.name === e.name)!.serial) updates.set(e.name, now);
+  }
+  return { serial: plan.serial, updates };
+}
+
+/** Whether two plans give every client the same S.No. */
+export function samePlan(a: InsertPlan, b: InsertPlan): boolean {
+  if (a.serial !== b.serial || a.updates.size !== b.updates.size) return false;
+  for (const [k, v] of a.updates) if (b.updates.get(k) !== v) return false;
+  return true;
+}

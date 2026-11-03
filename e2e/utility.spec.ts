@@ -106,7 +106,12 @@ test('setup: add a tab, edit drop-down lists, letterhead', async ({ page }) => {
   await page.getByRole('button', { name: /Letterhead/ }).click();
   await page.getByLabel(/Address and other lines/).fill('12, Gandhi Road\nNew Delhi');
   await page.getByLabel(/Firm name and signature/).fill('For JAIN & CO.\nChartered Accountants');
-  await page.getByPlaceholder('Line 1').fill('INDEX OF BILLS ##');
+  // The live preview follows the typing, and switches to the index sheet for its title.
+  await expect(page.locator('.lp .bc-address')).toContainText('12, Gandhi Road');
+  await expect(page.locator('.lp .bc-firm')).toContainText('Chartered Accountants');
+  await page.getByLabel('Index sheet title line 1').fill('INDEX OF BILLS ##');
+  await expect(page.getByRole('tab', { name: 'Index sheet' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('.lp .ix-title')).toHaveText(/^INDEX OF BILLS \d\d-\d\d$/);
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByText('Letterhead saved.')).toBeVisible();
   const info = cipherLines(join(dir, 'impinfo.txt'));

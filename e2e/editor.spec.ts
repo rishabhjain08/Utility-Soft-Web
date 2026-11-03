@@ -23,6 +23,17 @@ async function typeCell(page: Page, row: number, col: 'desc' | 'amount', text: s
   await el.fill(text);
 }
 
+/** Drags a row by its handle so it lands above the row with index `before`. */
+async function dragRow(page: Page, handle: string, before: number) {
+  const from = (await page.getByRole('button', { name: handle }).boundingBox())!;
+  const to = (await page.locator(`.grid tr[data-index="${before}"]`).boundingBox())!;
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(from.x + from.width / 2, to.y + 4, { steps: 6 });
+  await expect(page.locator(`.grid tr[data-index="${before}"]`)).toHaveClass(/drop-before/);
+  await page.mouse.up();
+}
+
 test('bill editor journey', async ({ page }) => {
   const picker = await start(page);
   const dir = programCopy();
@@ -85,7 +96,7 @@ test('bill editor journey', async ({ page }) => {
     'Expenses|20',
   ]);
 
-  // Separator ("New name") above row 2, then a second person's rows.
+  // A new group (saved as Java's "New Name" separator) from row 3, then a second person's rows.
   await page.locator('.grid [data-row="2"][data-col="desc"]').click();
   await page.keyboard.press('Control+b');
   await expect.poll(() => gridRows(page)).toEqual([
@@ -94,7 +105,10 @@ test('bill editor journey', async ({ page }) => {
     '--sep--',
     'Expenses|20',
   ]);
-  await expect(page.locator('tbody tr td.sno')).toHaveText(['1', '2', '', '3', '']);
+  await expect(page.locator('tbody tr[data-index] td.sno')).toHaveText(['1', '2', '', '3']);
+  await expect(page.locator('tr.group-head .group-label')).toHaveText(['Group 1', 'Group 2']);
+  await expect(page.locator('tr.subtotal td.amt:not(.hist)')).toHaveText(['1,800/-', '20/-']);
+  await expect(page.locator('tfoot td.desc')).toHaveText('Total of all 2 groups');
   // Insert a row above "Expenses" and type a name.
   await page.locator('.grid [data-row="3"][data-col="desc"]').click();
   await page.keyboard.press('Control+i');
@@ -108,9 +122,9 @@ test('bill editor journey', async ({ page }) => {
     'Expenses,20',
   ]);
 
-  // Delete a row with the row checkbox + Delete row.
-  await page.getByLabel('Select row 2').check();
-  await page.getByRole('button', { name: 'Delete row' }).click();
+  // Delete a row from its ⋯ menu.
+  await page.getByRole('button', { name: 'Row 2 actions' }).click();
+  await page.getByRole('menuitem', { name: 'Delete this row' }).click();
   await waitSaved(page);
   await expect.poll(() => gridRows(page)).toEqual([
     'Fee for IT Return for the Assessment Year 06-07|1500',
@@ -118,6 +132,14 @@ test('bill editor journey', async ({ page }) => {
     'SMT. KAMLA DEVI|',
     'Expenses|20',
   ]);
+
+  // Drag "Expenses" above the name by its handle, then back with the keyboard.
+  await dragRow(page, 'Drag row 3', 2);
+  await expect.poll(() => gridRows(page)).toEqual(['Fee for IT Return for the Assessment Year 06-07|1500', '--sep--', 'Expenses|20', 'SMT. KAMLA DEVI|']);
+  await page.locator('.grid [data-row="2"][data-col="desc"]').click();
+  await page.keyboard.press('Alt+ArrowDown');
+  await expect.poll(() => gridRows(page)).toEqual(['Fee for IT Return for the Assessment Year 06-07|1500', '--sep--', 'SMT. KAMLA DEVI|', 'Expenses|20']);
+  await waitSaved(page);
 
   // Print this bill: Chrome's print dialog gets both copies with totals and words.
   await page.keyboard.press('Control+p');
@@ -202,3 +224,51 @@ test('opening a client that is open elsewhere warns first', async ({ page }) => 
   await expect(page.locator('table.clients')).toBeVisible();
   expect(readFileSync(join(dir, 'data/activelocation.txt'), 'latin1')).toBe('');
 });
+
+test('bill rows: select several, drag them, delete them, join groups', async ({ page }) => {
+  const picker = await start(page);
+  const dir = programCopy();
+  await login(page, picker, dir);
+  await page.getByRole('cell', { name: 'RISHABH' }).dblclick();
+  await expect.poll(() => gridRows(page)).toEqual(['pooja|20']);
+  for (const [i, d, a] of [[1, 'a', '1'], [2, 'b', '2'], [3, 'c', '3']] as const) {
+    await typeCell(page, i, 'desc', d);
+    await typeCell(page, i, 'amount', a);
+  }
+  // A new group at the end: the cursor lands in its typing row.
+  await page.getByRole('button', { name: '+ Add group' }).click();
+  await page.keyboard.type('d');
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('4');
+  await expect.poll(() => gridRows(page)).toEqual(['pooja|20', 'a|1', 'b|2', 'c|3', '--sep--', 'd|4']);
+  await expect(page.locator('tr.subtotal td.amt:not(.hist)')).toHaveText(['26/-', '4/-']);
+
+  // Select rows 2-3 (click, Shift+click the numbers) and drag them into the second group.
+  await page.locator('.grid tr[data-index="1"] td.sno').click();
+  await page.locator('.grid tr[data-index="2"] td.sno').click({ modifiers: ['Shift'] });
+  await expect(page.locator('.grid tr.picked')).toHaveCount(2);
+  const from = (await page.getByRole('button', { name: 'Drag row 2' }).boundingBox())!;
+  const last = (await page.locator('.grid tr.extra').boundingBox())!;
+  await page.mouse.move(from.x + 5, from.y + 5);
+  await page.mouse.down();
+  await page.mouse.move(from.x + 5, last.y + 4, { steps: 6 });
+  await page.mouse.up();
+  await expect.poll(() => gridRows(page)).toEqual(['pooja|20', 'c|3', '--sep--', 'd|4', 'a|1', 'b|2']);
+  await expect(page.locator('tr.subtotal td.amt:not(.hist)')).toHaveText(['23/-', '7/-']);
+  await expect(page.locator('.grid tr.picked')).toHaveCount(2);
+
+  // The menu of a selected row deletes the whole selection.
+  await page.getByRole('button', { name: 'Row 5 actions' }).click();
+  await page.getByRole('menuitem', { name: 'Delete the 2 selected rows' }).click();
+  await expect.poll(() => gridRows(page)).toEqual(['pooja|20', 'c|3', '--sep--', 'd|4']);
+
+  // Joining the groups removes the break.
+  await page.getByRole('button', { name: 'Group 2 actions' }).click();
+  await page.getByRole('menuitem', { name: 'Join with group 1' }).click();
+  await expect.poll(() => gridRows(page)).toEqual(['pooja|20', 'c|3', 'd|4']);
+  await expect(page.locator('tr.group-head')).toHaveCount(0);
+  await expect(page.locator('tfoot td.desc')).toHaveText('Total');
+  await waitSaved(page);
+  expect(cipherLines(join(dir, 'data/bills/06-07/RISHABH/Audit/PREM CHAND.txt'))).toEqual(['pooja,20', 'c,3', 'd,4']);
+});
+

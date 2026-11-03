@@ -2,6 +2,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { Client, checkName, UserError } from '../core/workspace';
 import { writeDropdowns } from '../core/config';
 import { sameName } from '../core/sort';
+import { InsertPlan, planInsert, planRename, samePlan } from '../core/serial';
 import { Session } from './session';
 import { Modal, attempt, busy, setBusyLabel, toast } from './ui';
 
@@ -14,6 +15,54 @@ function nameProblem(name: string): string | null {
   }
 }
 
+// ---------- S.No. of a new or renamed client ----------
+
+/**
+ * Java's "Late entry" checkbox, shown as its two outcomes: the alphabetical number
+ * (renumbering the clients after it) or a lettered one that changes nobody else,
+ * for when the year's index sheet or bills are already printed.
+ */
+function SerialChoice({ year, existing, renumber, keep, value, onChange }: {
+  year: string; existing: Client[]; renumber: InsertPlan; keep: InsertPlan; value: boolean; onChange: (keep: boolean) => void;
+}) {
+  const changes = (p: InsertPlan) => {
+    const moved = existing.filter((c) => p.updates.has(c.name)).map((c) => `${c.name} ${c.serial} → ${p.updates.get(c.name)}`);
+    if (moved.length === 0) return 'No other client’s S.No. changes.';
+    const shown = moved.slice(0, 3).join(', ');
+    return `Also changes ${shown}${moved.length > 3 ? ` and ${moved.length - 3} more` : ''}.`;
+  };
+  if (!needsChoice(renumber, keep)) {
+    return (
+      <p class="serial-single">
+        S.No. <b>{renumber.serial}</b> <span class="hint">{changes(renumber)}</span>
+      </p>
+    );
+  }
+  return (
+    <fieldset class="serial-choice">
+      <legend>S.No.</legend>
+      <label class="check">
+        <input type="radio" name="serial" checked={!value} onChange={() => onChange(false)} />
+        <span>
+          <b>{renumber.serial}</b>, in alphabetical order <span class="hint">{changes(renumber)}</span>
+        </span>
+      </label>
+      <label class="check">
+        <input type="radio" name="serial" checked={value} onChange={() => onChange(true)} />
+        <span>
+          <b>{keep.serial}</b>, keeping everyone else’s S.No.{' '}
+          <span class="hint">For when the index sheet or bills of {year} are already printed. (The desktop version calls this “Late entry”.)</span>
+        </span>
+      </label>
+    </fieldset>
+  );
+}
+
+const entriesOf = (clients: Client[]) => clients.map((c) => ({ name: c.name, serial: c.serial }));
+
+/** Only worth asking when the alphabetical number would change someone else's. */
+const needsChoice = (renumber: InsertPlan, keep: InsertPlan) => renumber.updates.size > 0 && !samePlan(renumber, keep);
+
 // ---------- Add client ----------
 
 export function AddClientDialog({ s, year, existing, onClose, onAdded }: {
@@ -24,10 +73,12 @@ export function AddClientDialog({ s, year, existing, onClose, onAdded }: {
   const duplicate = existing.some((c) => sameName(c.name, name.trim()));
   const problem = name.trim() === '' ? null : duplicate ? 'This name already exists.' : nameProblem(name);
   const can = name.trim() !== '' && !problem;
+  const upper = name.trim().toUpperCase();
+  const plans = can ? { renumber: planInsert(entriesOf(existing), upper, false), keep: planInsert(entriesOf(existing), upper, true) } : null;
   const submit = () => {
     if (!can) return;
     busy('Adding…', async () => {
-      const c = await s.ws.addClient(year, name, late);
+      const c = await s.ws.addClient(year, name, late && !!plans && needsChoice(plans.renumber, plans.keep));
       toast(`${c.name} added with S.No. ${c.serial}.`, 'ok');
       onAdded(c.name);
     });
@@ -50,12 +101,7 @@ export function AddClientDialog({ s, year, existing, onClose, onAdded }: {
         <input class="upper" autoFocus value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} onKeyDown={(e) => e.key === 'Enter' && submit()} />
       </label>
       {problem && <p class="warn">{problem}</p>}
-      <label class="check">
-        <input type="checkbox" checked={late} onChange={(e) => setLate((e.target as HTMLInputElement).checked)} />
-        <span>
-          Late entry <span class="hint">— keep everyone else's S.No.; this client gets a number like 5A</span>
-        </span>
-      </label>
+      {plans && <SerialChoice year={year} existing={existing} {...plans} value={late} onChange={setLate} />}
       <p class="hint">Bills this client had in the previous years are brought in automatically.</p>
     </Modal>
   );
@@ -72,10 +118,16 @@ export function ModifyClientDialog({ s, year, client, existing, onClose, onDone 
   const renamed = name.trim().toUpperCase() !== client.name;
   const collides = renamed && existing.some((c) => c.name !== client.name && sameName(c.name, name.trim()));
   const problem = renamed ? nameProblem(name) : null;
+  const upper = name.trim().toUpperCase();
+  const plans =
+    renamed && !collides && !problem
+      ? { renumber: planRename(entriesOf(existing), client.name, upper, false), keep: planRename(entriesOf(existing), client.name, upper, true) }
+      : null;
   const submit = () => {
     if (problem) return;
     busy('Saving…', async () => {
-      const n = await s.ws.modifyClient(year, client.name, renamed ? name : client.name, billNo.trim().toUpperCase(), late);
+      const keep = late && !!plans && needsChoice(plans.renumber, plans.keep);
+      const n = await s.ws.modifyClient(year, client.name, renamed ? name : client.name, billNo.trim().toUpperCase(), keep);
       toast(renamed ? `Renamed to ${n}.` : 'Saved.', 'ok');
       onDone(n);
     });
@@ -108,14 +160,7 @@ export function ModifyClientDialog({ s, year, client, existing, onClose, onDone 
         <span>Bill No.</span>
         <input class="upper" value={billNo} onInput={(e) => setBillNo((e.target as HTMLInputElement).value)} onKeyDown={(e) => e.key === 'Enter' && submit()} />
       </label>
-      {renamed && !collides && (
-        <label class="check">
-          <input type="checkbox" checked={late} onChange={(e) => setLate((e.target as HTMLInputElement).checked)} />
-          <span>
-            Late entry <span class="hint">— keep everyone else's S.No. at the new position</span>
-          </span>
-        </label>
-      )}
+      {plans && <SerialChoice year={year} existing={existing} {...plans} value={late} onChange={setLate} />}
       <p class="hint">Renaming only changes {year}; earlier years keep the old name.</p>
     </Modal>
   );

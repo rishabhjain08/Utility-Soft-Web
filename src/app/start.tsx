@@ -5,6 +5,7 @@ import { Letterhead, readPassword, writeDataPath, writeLetterhead, writePassword
 import { ensurePermission, pickFolder, rememberPath, rememberProgram, rememberedProgram, relativeTo, supportsFolders } from './folders';
 import { checkPassword, createProgram, inspectProgram, looksLikeData, prepareDataFolder } from './session';
 import { attempt, busy, confirmDialog, promptDialog, toast } from './ui';
+import { LetterheadPart, LetterheadPreview, SAMPLE } from './letterhead-preview';
 
 // ---------- Welcome: choose the program folder ----------
 
@@ -321,35 +322,59 @@ export function LetterheadForm({
     });
   };
 
+  const [focus, setFocus] = useState<LetterheadPart | null>(null);
+  const track = (part: LetterheadPart) => ({ onFocus: () => setFocus(part), onBlur: () => setFocus(null) });
+
   const body = (
-    <form class={embedded ? 'letterhead' : 'card wide letterhead'} onSubmit={save}>
+    <form class={embedded ? 'letterhead' : 'card letterhead-card letterhead'} onSubmit={save}>
       {!embedded && <h1>Your letterhead</h1>}
-      <p class="lead">Printed at the bottom of every bill, and at the top of the index sheet.</p>
-      <div class="two-col">
-        <label class="field">
-          <span>Address and other lines (printed on the left)</span>
-          <textarea rows={5} value={address} autoFocus onInput={(e) => setAddress((e.target as HTMLTextAreaElement).value)} />
-        </label>
-        <label class="field">
-          <span>Firm name and signature lines (printed on the right)</span>
-          <textarea rows={5} value={name} onInput={(e) => setName((e.target as HTMLTextAreaElement).value)} />
-        </label>
+      <p class="lead">Printed at the bottom of every bill, and at the top of the index sheet. The preview shows where each part goes.</p>
+      <div class="lh-layout">
+        <div class="lh-fields">
+          <label class="field">
+            <span>Address and other lines (printed on the left)</span>
+            <textarea
+              rows={4}
+              value={address}
+              autoFocus
+              placeholder={`e.g. ${SAMPLE.address.join('\n')}`}
+              {...track('address')}
+              onInput={(e) => setAddress((e.target as HTMLTextAreaElement).value)}
+            />
+          </label>
+          <label class="field">
+            <span>Firm name and signature lines (printed on the right)</span>
+            <textarea
+              rows={4}
+              value={name}
+              placeholder={`e.g. ${SAMPLE.firm.join('\n')}`}
+              {...track('firm')}
+              onInput={(e) => setName((e.target as HTMLTextAreaElement).value)}
+            />
+          </label>
+          <fieldset>
+            <legend>Index sheet title (up to 3 lines; ## is replaced by the year)</legend>
+            {[0, 1, 2].map((i) => (
+              <input
+                key={i}
+                aria-label={`Index sheet title line ${i + 1}`}
+                placeholder={SAMPLE.titles[i] ? `e.g. ${SAMPLE.titles[i]}` : `Line ${i + 1}`}
+                value={titles[i]}
+                {...track('titles')}
+                onInput={(e) => {
+                  const t = [...titles];
+                  t[i] = (e.target as HTMLInputElement).value;
+                  setTitles(t);
+                }}
+              />
+            ))}
+          </fieldset>
+        </div>
+        <LetterheadPreview
+          letterhead={{ firmName: lines(name), firmAddress: lines(address), indexTitles: [titles[0], titles[1], titles[2]] }}
+          focus={focus}
+        />
       </div>
-      <fieldset>
-        <legend>Index sheet title (up to 3 lines; ## is replaced by the year)</legend>
-        {[0, 1, 2].map((i) => (
-          <input
-            key={i}
-            placeholder={`Line ${i + 1}`}
-            value={titles[i]}
-            onInput={(e) => {
-              const t = [...titles];
-              t[i] = (e.target as HTMLInputElement).value;
-              setTitles(t);
-            }}
-          />
-        ))}
-      </fieldset>
       <div class="row">
         {onSkip && (
           <button type="button" onClick={onSkip}>

@@ -44,7 +44,7 @@ test('reads data written by the Java program', async ({ page }) => {
     '--sep--',
     'Fee for IT Return for the Assessment Year 07-08|0',
   ]);
-  await expect(page.locator('tbody tr').nth(0).locator('td.hist').first()).toHaveText('700');
-  await expect(page.locator('tbody tr').nth(3).locator('td.hist').first()).toHaveText('1200');
+  await expect(page.locator('tbody tr[data-index]').nth(0).locator('td.hist').first()).toHaveText('700');
+  await expect(page.locator('tbody tr[data-index]').nth(3).locator('td.hist').first()).toHaveText('1200');
   await expect(page.locator('tfoot td.hist').first()).toHaveText('1,950/-');
 });

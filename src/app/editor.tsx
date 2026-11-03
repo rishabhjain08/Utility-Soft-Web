@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { BillRow, HistoryColumn, SEPARATOR, billTotal, historyColumns, isSeparator, isValidAmount, rowNumbers } from '../core/bill';
+import { BillRow, HistoryColumn, SEPARATOR, billTotal, historyColumns, isValidAmount, rowGroups, rowNumbers } from '../core/bill';
 import { BillType } from '../core/config';
 import { groupIndian } from '../core/money';
 import { Client } from '../core/workspace';
@@ -185,9 +185,8 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
     update(next);
   };
 
-  const insertRow = (sep = false) => {
+  const insertAt = (at: number, sep = false) => {
     if (!bill) return;
-    const at = Math.min(focus.row, rows.length);
     const next = [...rows];
     next.splice(at, 0, sep ? { desc: SEPARATOR, amount: '' } : blank());
     update(next);
@@ -195,15 +194,38 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
     setFocus({ row: sep ? at + 1 : at, col: 'desc' });
     focusCell(sep ? at + 1 : at, 'desc');
   };
+  const insertRow = (sep = false) => insertAt(Math.min(focus.row, rows.length), sep);
 
-  const deleteRows = () => {
-    const t = new Set(targetRows());
+  /** Starts a new, empty group at the end of the bill and puts the cursor in it. */
+  const addGroup = () => {
+    if (!bill) return;
+    const next = [...rows, { desc: SEPARATOR, amount: '' }];
+    update(next);
+    setPicked(new Set());
+    setFocus({ row: next.length, col: 'desc' });
+    focusCell(next.length, 'desc');
+  };
+
+  const deleteRows = (which?: number[]) => {
+    const t = new Set(which ?? targetRows());
     if (!t.size) return;
     update(rows.filter((_, i) => !t.has(i)));
     setPicked(new Set());
     const row = Math.min(Math.min(...t), Math.max(0, rows.length - t.size));
     setFocus({ row, col: focus.col });
     focusCell(row, focus.col);
+  };
+
+  /** Moves rows (in their order) so they start where row `at` is now. */
+  const moveRowsTo = (moving: number[], at: number) => {
+    const set = new Set(moving);
+    const rest = rows.filter((_, i) => !set.has(i));
+    const ins = at - moving.filter((i) => i < at).length;
+    const next = [...rest.slice(0, ins), ...moving.map((i) => rows[i]), ...rest.slice(ins)];
+    if (next.every((r, i) => r === rows[i])) return;
+    update(next);
+    setPicked(moving.length > 1 ? new Set(moving.map((_, k) => ins + k)) : new Set());
+    setFocus({ row: ins, col: focus.col });
   };
 
   const move = (d: -1 | 1) => {
@@ -220,6 +242,63 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
     setFocus({ row: focus.row + d, col: focus.col });
     focusCell(focus.row + d, focus.col);
   };
+
+  // Selecting rows: click the row number; Ctrl adds or removes one, Shift a range.
+  const anchor = useRef<number | null>(null);
+  const pickRow = (e: MouseEvent, i: number) => {
+    e.preventDefault();
+    let next: Set<number>;
+    if (e.shiftKey && anchor.current !== null) {
+      next = new Set();
+      for (let k = Math.min(anchor.current, i); k <= Math.max(anchor.current, i); k++) next.add(k);
+    } else if (e.ctrlKey || e.metaKey) {
+      next = new Set(picked);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+    } else {
+      next = picked.size === 1 && picked.has(i) ? new Set() : new Set([i]);
+    }
+    anchor.current = i;
+    setPicked(next);
+  };
+
+  // Dragging rows by their handle (several when the dragged row is selected).
+  const [drag, setDrag] = useState<{ rows: number[]; at: number } | null>(null);
+  const startDrag = (e: PointerEvent, i: number) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const moving = picked.has(i) ? [...picked].filter((x) => x < rows.length).sort((a, b) => a - b) : [i];
+    const table = (e.currentTarget as HTMLElement).closest('table')!;
+    const wrap = table.closest<HTMLElement>('.grid-wrap');
+    let at = i;
+    setDrag({ rows: moving, at });
+    const onMove = (ev: PointerEvent) => {
+      at = rows.length;
+      for (const tr of table.querySelectorAll<HTMLElement>('tr[data-index]')) {
+        const r = tr.getBoundingClientRect();
+        if (ev.clientY < r.top + r.height / 2) {
+          at = Number(tr.dataset.index);
+          break;
+        }
+      }
+      setDrag({ rows: moving, at });
+      if (wrap) {
+        const w = wrap.getBoundingClientRect();
+        if (ev.clientY < w.top + 40) wrap.scrollTop -= 12;
+        else if (ev.clientY > w.bottom - 40) wrap.scrollTop += 12;
+      }
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      setDrag(null);
+      moveRowsTo(moving, at);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
+
+  const [menu, setMenu] = useState<number | null>(null);
 
   // ---------- bill operations ----------
   const newBill = () =>
@@ -330,15 +409,124 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
       e.preventDefault();
       // Esc first leaves the cell being typed in; Esc again goes back to the list.
       const t = e.target as HTMLElement;
-      if (t.closest('.grid') && (t instanceof HTMLInputElement || t.classList.contains('sep-label'))) t.blur();
+      if (t.closest('.grid') && (t instanceof HTMLInputElement || t.classList.contains('group-label'))) t.blur();
       else done();
     }
   };
 
   keyRef.current = onKey;
   const yIdx = years.indexOf(year);
-  const hist = columns.length ? columns : previousYears(year, 3).map((y) => ({ year: y, values: rows.map(() => '--'), total: 0 }));
-  const shown = ready ? [...rows, blank()] : [];
+  const hist: HistoryColumn[] = columns.length
+    ? columns
+    : previousYears(year, 3).map((y) => ({ year: y, values: rows.map(() => '--'), counted: rows.map(() => 0), total: 0 }));
+  const groups = ready ? rowGroups(rows) : [];
+  const grouped = groups.length > 1;
+  const dropClass = (i: number) => (drag && drag.at === i ? 'drop-before' : '');
+
+  const rowView = (i: number) => {
+    const extra = i === rows.length;
+    const r = extra ? blank() : rows[i];
+    const cls = [picked.has(i) ? 'picked' : '', focus.row === i ? 'current' : '', extra ? 'extra' : '', drag?.rows.includes(i) ? 'moving' : '', dropClass(i)];
+    return (
+      <tr key={`r${i}`} data-index={extra ? undefined : i} class={cls.join(' ')}>
+        <td class="grip">{!extra && <GripButton label={`Drag row ${numbers[i]}`} onPointerDown={(e) => startDrag(e, i)} />}</td>
+        <td class="sno" onMouseDown={extra ? undefined : (e) => pickRow(e, i)} title={extra ? undefined : 'Click to select (Ctrl or Shift for more)'}>
+          {extra ? '' : numbers[i]}
+        </td>
+        <td class="desc">
+          <FieldInput
+            row={i}
+            placeholder={extra ? 'Type here to add a row' : undefined}
+            value={r.desc}
+            items={suggest}
+            onFocus={() => setFocus({ row: i, col: 'desc' })}
+            onChange={(v) => setCell(i, { desc: v })}
+            onNav={(e) => gridNav(e, i, 'desc')}
+            onPicked={() => focusCell(i, 'amount')}
+          />
+        </td>
+        <td class="amt">
+          <input
+            class={`amt-input ${isValidAmount(r.amount) ? '' : 'invalid'}`}
+            inputMode="numeric"
+            aria-label={`Amount row ${i + 1}`}
+            data-row={i}
+            data-col="amount"
+            value={r.amount}
+            onFocus={() => setFocus({ row: i, col: 'amount' })}
+            onInput={(e) => {
+              const el = e.target as HTMLInputElement;
+              const v = el.value.replace(/[,\s]/g, '');
+              if (!/^[+-]?\d*$/.test(v) || !isValidAmount(v === '+' || v === '-' ? '' : v)) {
+                el.value = r.amount;
+                return;
+              }
+              setCell(i, { amount: v });
+            }}
+            onKeyDown={(e) => gridNav(e, i, 'amount')}
+          />
+        </td>
+        <td class="act">
+          {!extra && (
+            <RowMenu
+              label={`Row ${numbers[i]} actions`}
+              open={menu === i}
+              onOpen={(o) => setMenu(o ? i : null)}
+              items={[
+                { label: 'Insert a row above', run: () => insertAt(i) },
+                { label: 'Insert a row below', run: () => insertAt(i + 1) },
+                { label: 'Start a new group from this row', run: () => insertAt(i, true) },
+                picked.has(i) && picked.size > 1
+                  ? { label: `Delete the ${picked.size} selected rows`, run: () => deleteRows(), danger: true }
+                  : { label: 'Delete this row', run: () => deleteRows([i]), danger: true },
+              ]}
+            />
+          )}
+        </td>
+        {hist.map((h) => (
+          <td key={h.year} class="amt hist">
+            {extra ? '' : h.values[i]}
+          </td>
+        ))}
+      </tr>
+    );
+  };
+
+  /** The heading of a group: the separator row it starts with (none for the first group). */
+  const groupHead = (i: number | null, gi: number) => (
+    <tr key={`h${gi}`} data-index={i ?? undefined} class={`group-head ${i !== null ? dropClass(i) : ''} ${i !== null && drag?.rows.includes(i) ? 'moving' : ''} ${i !== null && picked.has(i) ? 'picked' : ''}`}>
+      <td class="grip">{i !== null && <GripButton label={`Drag group ${gi + 1}`} onPointerDown={(e) => startDrag(e, i)} />}</td>
+      <td class="sno" />
+      <td class="desc" colSpan={2}>
+        <span
+          class="group-label"
+          tabIndex={i === null ? undefined : 0}
+          data-row={i ?? undefined}
+          data-col={i === null ? undefined : 'desc'}
+          onFocus={i === null ? undefined : () => setFocus({ row: i, col: 'desc' })}
+          onKeyDown={i === null ? undefined : (e) => gridNav(e, i, 'desc')}
+        >
+          Group {gi + 1}
+        </span>
+      </td>
+      <td class="act">
+        {i !== null && (
+          <RowMenu
+            label={`Group ${gi + 1} actions`}
+            open={menu === i}
+            onOpen={(o) => setMenu(o ? i : null)}
+            items={[
+              { label: 'Insert a row above (end of the group before)', run: () => insertAt(i) },
+              { label: `Join with group ${gi}`, run: () => deleteRows([i]), danger: true },
+            ]}
+          />
+        )}
+      </td>
+      {hist.map((h) => (
+        <td key={h.year} class="hist" />
+      ))}
+    </tr>
+  );
 
   return (
     <div class="screen editor">
@@ -420,31 +608,22 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
           ) : (
             <>
               <div class="toolbar">
-                <button onClick={() => insertRow()} title="Insert a row above the current one (Ctrl+I)">
-                  Insert row
+                <button onClick={addGroup} title="Start a new group of rows with its own subtotal, e.g. for another person on this bill (Ctrl+B starts one at the current row)">
+                  + Add group
                 </button>
-                <button onClick={deleteRows} title="Delete the current or ticked rows (Ctrl+Delete)">
-                  Delete row
-                </button>
-                <button onClick={() => move(-1)} title="Move up (Alt+↑)">
-                  Move up
-                </button>
-                <button onClick={() => move(1)} title="Move down (Alt+↓)">
-                  Move down
-                </button>
-                <button onClick={() => insertRow(true)} title="Start a new name: rows below are a separate group with its own subtotal (Ctrl+B)">
-                  New name
-                </button>
-                <span class="hint grow">Type in Field to see the drop-down list (Ctrl+Space shows all).</span>
+                <span class="hint grow">
+                  Drag <Grip /> to reorder rows, click a row number to select it (Ctrl or Shift for more), ⋯ for more. Ctrl+Space shows the drop-down list.
+                </span>
               </div>
               <div class="grid-wrap">
-                <table class="grid">
+                <table class={`grid ${drag ? 'dragging' : ''}`}>
                   <thead>
                     <tr>
-                      <th class="pick" />
+                      <th class="grip" />
                       <th class="sno">S.No.</th>
                       <th class="desc">Field</th>
                       <th class="amt">Amount</th>
+                      <th class="act" />
                       {hist.map((h) => (
                         <th key={h.year} class="amt hist">
                           {h.year}
@@ -452,94 +631,39 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
                       ))}
                     </tr>
                   </thead>
-                  <tbody>
-                    {shown.map((r, i) => {
-                      const sep = isSeparator(r);
-                      const extra = i === rows.length;
-                      return (
-                        <tr key={i} class={`${sep ? 'sep' : ''} ${picked.has(i) ? 'picked' : ''} ${focus.row === i ? 'current' : ''} ${extra ? 'extra' : ''}`}>
-                          <td class="pick">
-                            {!extra && (
-                              <input
-                                type="checkbox"
-                                tabIndex={-1}
-                                aria-label={`Select row ${i + 1}`}
-                                checked={picked.has(i)}
-                                onChange={() => {
-                                  const p = new Set(picked);
-                                  if (p.has(i)) p.delete(i);
-                                  else p.add(i);
-                                  setPicked(p);
-                                }}
-                              />
-                            )}
-                          </td>
-                          <td class="sno">{extra ? '' : numbers[i]}</td>
-                          {sep ? (
-                            <td class="desc sep-cell" colSpan={2}>
-                              <span
-                                tabIndex={0}
-                                class="sep-label"
-                                data-row={i}
-                                data-col="desc"
-                                onFocus={() => setFocus({ row: i, col: 'desc' })}
-                                onKeyDown={(e) => gridNav(e, i, 'desc')}
-                              >
-                                New name — rows below form a separate group
-                              </span>
-                            </td>
-                          ) : (
-                            <>
-                              <td class="desc">
-                                <FieldInput
-                                  row={i}
-                                  placeholder={extra ? 'Type here to add a row' : undefined}
-                                  value={r.desc}
-                                  items={suggest}
-                                  onFocus={() => setFocus({ row: i, col: 'desc' })}
-                                  onChange={(v) => setCell(i, { desc: v })}
-                                  onNav={(e) => gridNav(e, i, 'desc')}
-                                  onPicked={() => focusCell(i, 'amount')}
-                                />
-                              </td>
-                              <td class="amt">
-                                <input
-                                  class={`amt-input ${isValidAmount(r.amount) ? '' : 'invalid'}`}
-                                  inputMode="numeric"
-                                  aria-label={`Amount row ${i + 1}`}
-                                  data-row={i}
-                                  data-col="amount"
-                                  value={r.amount}
-                                  onFocus={() => setFocus({ row: i, col: 'amount' })}
-                                  onInput={(e) => {
-                                    const el = e.target as HTMLInputElement;
-                                    const v = el.value.replace(/[,\s]/g, '');
-                                    if (!/^[+-]?\d*$/.test(v) || !isValidAmount(v === '+' || v === '-' ? '' : v)) {
-                                      el.value = r.amount;
-                                      return;
-                                    }
-                                    setCell(i, { amount: v });
-                                  }}
-                                  onKeyDown={(e) => gridNav(e, i, 'amount')}
-                                />
-                              </td>
-                            </>
-                          )}
+                  {groups.map((g, gi) => (
+                    <tbody key={gi} class={grouped ? 'group' : ''}>
+                      {grouped && gi > 0 && (
+                        <tr class="gap" aria-hidden="true">
+                          <td colSpan={5 + hist.length} />
+                        </tr>
+                      )}
+                      {grouped && groupHead(g.start, gi)}
+                      {/* One keyed list, so the typing row keeps its inputs when it becomes a real row. */}
+                      {(gi === groups.length - 1 ? [...g.rows, rows.length] : g.rows).map((i) => rowView(i))}
+                      {grouped && (
+                        <tr class="subtotal">
+                          <td class="grip" />
+                          <td class="sno" />
+                          <td class="desc">Subtotal, group {gi + 1}</td>
+                          <td class="amt">{groupIndian(billTotal(g.rows.map((i) => rows[i])))}/-</td>
+                          <td class="act" />
                           {hist.map((h) => (
                             <td key={h.year} class="amt hist">
-                              {extra || sep ? '' : h.values[i]}
+                              {groupIndian(g.rows.reduce((t, i) => t + h.counted[i], 0))}/-
                             </td>
                           ))}
                         </tr>
-                      );
-                    })}
-                  </tbody>
+                      )}
+                    </tbody>
+                  ))}
                   <tfoot>
                     <tr>
                       <td />
                       <td />
-                      <td class="desc">Total</td>
+                      <td class="desc">{grouped ? `Total of all ${groups.length} groups` : 'Total'}</td>
                       <td class="amt">{groupIndian(total)}/-</td>
+                      <td />
                       {hist.map((h) => (
                         <td key={h.year} class="amt hist">
                           {groupIndian(h.total)}/-
@@ -747,4 +871,82 @@ export async function confirmNextYearCopy(s: Session, year: string, name: string
     await s.ws.copyClientToNextYear(year, name);
     toast(`${name} copied to ${next}.`, 'ok');
   });
+}
+
+/** Six dots: the usual sign that something can be dragged. */
+function Grip() {
+  return (
+    <svg class="grip-dots" width="8" height="14" viewBox="0 0 8 14" aria-hidden="true">
+      {[2, 7, 12].map((y) => [<circle key={`a${y}`} cx="2" cy={y} r="1.3" />, <circle key={`b${y}`} cx="6" cy={y} r="1.3" />])}
+    </svg>
+  );
+}
+
+function GripButton({ label, onPointerDown }: { label: string; onPointerDown: (e: PointerEvent) => void }) {
+  return (
+    <span class="grip-btn" role="button" aria-label={label} title="Drag to move" onPointerDown={onPointerDown}>
+      <Grip />
+    </span>
+  );
+}
+
+interface MenuItem {
+  label: string;
+  run: () => void;
+  danger?: boolean;
+}
+
+/** The ⋯ button of a row and its menu. */
+function RowMenu({ label, open, onOpen, items }: { label: string; open: boolean; onOpen: (open: boolean) => void; items: MenuItem[] }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [up, setUp] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    // Open upwards when there is no room below (rows near the bottom of the window).
+    const scroller = ref.current?.closest('.grid-wrap') ?? document.documentElement;
+    setUp(ref.current!.getBoundingClientRect().bottom + 200 > scroller.getBoundingClientRect().bottom);
+    const outside = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && onOpen(false);
+    window.addEventListener('pointerdown', outside);
+    ref.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    return () => window.removeEventListener('pointerdown', outside);
+  }, [open]);
+  const onKey = (e: KeyboardEvent) => {
+    const all = Array.from(ref.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
+    const at = all.indexOf(document.activeElement as HTMLElement);
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      onOpen(false);
+      ref.current?.querySelector<HTMLElement>('.menu-btn')?.focus();
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      all[(at + (e.key === 'ArrowDown' ? 1 : all.length - 1)) % all.length]?.focus();
+    }
+  };
+  return (
+    <div class={`row-menu ${up ? 'up' : ''}`} ref={ref} onKeyDown={onKey}>
+      <button type="button" class="menu-btn" tabIndex={-1} aria-label={label} aria-haspopup="menu" aria-expanded={open} onClick={() => onOpen(!open)}>
+        ⋯
+      </button>
+      {open && (
+        <div class="menu" role="menu" aria-label={label}>
+          {items.map((it) => (
+            <button
+              key={it.label}
+              type="button"
+              role="menuitem"
+              class={it.danger ? 'danger' : ''}
+              onClick={() => {
+                onOpen(false);
+                it.run();
+              }}
+            >
+              {it.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }

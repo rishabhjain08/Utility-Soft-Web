@@ -484,12 +484,122 @@ table.grid td {
   padding: 0;
   height: 34px;
 }
-table.grid .pick {
-  width: 30px;
+/* rows cover the page ruling, which only continues below the last row */
+table.grid tbody td {
+  background-color: var(--paper);
+}
+table.grid .grip {
+  width: 24px;
   text-align: center;
 }
-table.grid .pick input {
-  accent-color: var(--ledger);
+.grip-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 28px;
+  cursor: grab;
+  color: #b4bfc8;
+  border-radius: 3px;
+  touch-action: none;
+}
+.grip-dots {
+  fill: currentColor;
+  vertical-align: middle;
+}
+.toolbar .grip-dots {
+  color: var(--pencil);
+  margin: 0 1px;
+}
+table.grid tr:hover .grip-btn,
+table.grid tr.current .grip-btn {
+  color: var(--muted);
+}
+.grip-btn:hover {
+  background: var(--ledger-soft);
+  color: var(--ledger) !important;
+}
+table.grid.dragging,
+table.grid.dragging * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+table.grid tr.moving td {
+  opacity: 0.45;
+}
+/* where the dragged rows will land */
+table.grid tr.drop-before td {
+  box-shadow: inset 0 3px 0 var(--ledger);
+}
+table.grid td.sno {
+  cursor: pointer;
+}
+table.grid tr.extra td.sno {
+  cursor: default;
+}
+table.grid .act {
+  width: 34px;
+  text-align: center;
+  position: relative;
+}
+.row-menu {
+  position: relative;
+}
+.menu-btn {
+  border: 0;
+  background: transparent;
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+  color: #b4bfc8;
+  border-radius: 3px;
+}
+table.grid tr:hover .menu-btn,
+table.grid tr.current .menu-btn,
+.menu-btn[aria-expanded='true'] {
+  color: var(--ink);
+}
+.menu-btn:hover,
+.menu-btn[aria-expanded='true'] {
+  background: var(--ledger-soft);
+}
+.row-menu .menu {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  margin-top: 2px;
+  z-index: 40;
+  min-width: 250px;
+  background: var(--paper);
+  border: 1px solid var(--rule-strong);
+  box-shadow: 0 12px 28px -12px rgba(0, 0, 0, 0.4);
+  padding: 4px 0;
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+}
+.row-menu.up .menu {
+  top: auto;
+  bottom: 100%;
+}
+.row-menu .menu button {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+  padding: 7px 14px;
+  font-size: 14px;
+}
+.row-menu .menu button:hover,
+.row-menu .menu button:focus {
+  background: var(--ledger-soft);
+  outline: none;
+}
+.row-menu .menu button.danger {
+  color: var(--margin);
+  border-top: 1px solid var(--rule);
 }
 table.grid .sno {
   width: 52px;
@@ -570,18 +680,44 @@ table.grid tfoot td.hist {
   color: var(--pencil);
   font-weight: 600;
 }
-tr.sep td {
+/* groups ("New Name" in the desktop version): blocks with their own subtotal, as printed */
+table.grid tr.gap td {
+  border-bottom: 0;
+  background: var(--desk);
+}
+table.grid tr.group-head td {
+  background: var(--ledger-soft);
+  border-bottom: 1px solid var(--rule-strong);
+}
+table.grid tr.group-head td.sno {
+  border-right-color: transparent;
+}
+.group-label {
+  display: block;
+  padding: 0 10px;
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--ledger);
+  outline: none;
+}
+.group-label:focus {
+  text-decoration: underline;
+}
+table.grid tr.subtotal td {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  padding: 0 12px;
   background: var(--paper);
 }
-.sep-cell {
-  padding: 0 10px !important;
-}
-.sep-label {
-  display: block;
-  color: var(--margin);
+table.grid tr.subtotal td.desc {
+  text-align: right;
   font-size: 13px;
-  border-top: 1px dashed var(--margin);
-  padding-top: 3px;
+  color: var(--muted);
+  font-weight: 400;
+}
+table.grid tr.subtotal td.amt:not(.hist) {
+  box-shadow: inset 0 1px 0 var(--ink);
 }
 .field-cell {
   position: relative;
@@ -838,6 +974,111 @@ ul.suggest li.hi {
   }
 }
 
+/* ---------- S.No. of a new or renamed client ---------- */
+.serial-choice {
+  gap: 10px;
+  padding: 8px 12px 12px;
+}
+.serial-choice .check {
+  align-items: flex-start;
+}
+.serial-choice .hint,
+.serial-single .hint {
+  display: block;
+  margin-top: 2px;
+}
+.serial-single {
+  margin: 12px 0;
+}
+
+/* ---------- letterhead form with its live preview ---------- */
+.card.letterhead-card {
+  width: 1080px;
+}
+.modal.letterhead-modal {
+  width: 1080px;
+}
+.lh-layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 5fr) minmax(340px, 6fr);
+  gap: 24px;
+  align-items: start;
+}
+.lh-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.lh-fields fieldset {
+  margin: 0;
+}
+.lh-fields textarea::placeholder,
+.lh-fields input::placeholder {
+  color: var(--pencil);
+  font-style: italic;
+}
+.lp-wrap {
+  min-width: 0;
+}
+.lp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.lp-label {
+  font-size: 13px;
+  color: var(--muted);
+}
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.seg button {
+  border: 0;
+  border-radius: 0;
+  padding: 3px 12px;
+  font-size: 13px;
+  background: transparent;
+}
+.seg button + button {
+  border-left: 1px solid var(--rule);
+}
+.seg button.active {
+  background: var(--ledger);
+  color: #fff;
+}
+.lp-box {
+  background: var(--desk);
+  border: 1px solid var(--rule);
+  padding: 10px;
+  max-height: 460px;
+  overflow: hidden;
+}
+.lp-page.page {
+  height: auto;
+  min-height: 0;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+  user-select: none;
+}
+/* Made-up lines standing in for blocks not filled in yet (the date line is the app's own). */
+.lp.ph-address .bc-address > div:not(:last-child),
+.lp.ph-firm .bc-firm > div:not(.bc-sign),
+.lp.ph-titles .ix-title {
+  color: #a3aba6;
+  font-style: italic;
+}
+/* The block of the field being typed in. */
+.lp.hl-address .bc-address,
+.lp.hl-firm .bc-firm,
+.lp.hl-titles .ix-title {
+  background: var(--mark);
+  box-shadow: 0 0 0 6px var(--mark);
+}
+
 /* ---------- printing ---------- */
 /* Pages are laid out here, off screen, before Chrome's print dialog opens. */
 .print-stage {
@@ -1045,6 +1286,12 @@ ul.suggest li.hi {
   }
   .ix-table tr {
     break-inside: avoid;
+  }
+}
+
+@media (max-width: 900px) {
+  .lh-layout {
+    grid-template-columns: 1fr;
   }
 }
 

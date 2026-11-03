@@ -64,11 +64,11 @@ export async function selectClient(page: Page, name: string) {
   await page.locator('table.clients tbody tr', { has: page.locator('td.name', { hasText: new RegExp(`^${name}$`) }) }).click();
 }
 
-/** Rows of the bill grid as "desc|amount" (separators as "--sep--"). */
+/** Rows of the bill grid as "desc|amount" (group breaks, saved as separators, as "--sep--"). */
 export async function gridRows(page: Page): Promise<string[]> {
-  return page.locator('table.grid tbody tr:not(.extra)').evaluateAll((trs) =>
+  return page.locator('table.grid tbody tr[data-index]').evaluateAll((trs) =>
     trs.map((tr) => {
-      if (tr.classList.contains('sep')) return '--sep--';
+      if (tr.classList.contains('group-head')) return '--sep--';
       const d = (tr.querySelector('.desc-input') as HTMLInputElement).value;
       const a = (tr.querySelector('.amt-input') as HTMLInputElement).value;
       return `${d}|${a}`;

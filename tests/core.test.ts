@@ -3,7 +3,7 @@ import {
   decodeCipherLines, decodeCipherValue, decodeBytes, encodeCipherLines, encodeCipherValue, encodePlain, sanitize, splitLines,
 } from '../src/core/codec';
 import { letterheadFromImpinfo, parseBillTypes, dropdownItems, isRelativePath } from '../src/core/config';
-import { planInsert, planRemove, SerialEntry } from '../src/core/serial';
+import { planInsert, planRemove, planRename, samePlan, SerialEntry } from '../src/core/serial';
 import { historyColumns, linesFromRows, mergeHistory, protectForJava, rowsFromLines, isValidAmount, rowNumbers } from '../src/core/bill';
 import { amountInWords, formatAmount, groupIndian } from '../src/core/money';
 import { compareIgnoreCase, sortStrings } from '../src/core/sort';
@@ -136,6 +136,34 @@ describe('serial numbers', () => {
     expect([...planRemove(l, 'B')]).toEqual([['B2', '1A'], ['C', '2']]);
     expect(planRemove(l, 'B2').size).toBe(0);
     expect(planRemove(e([['A', '']]), 'A').size).toBe(0);
+  });
+
+  it('renaming in place changes nothing either way', () => {
+    const l = e([['A', '1'], ['C', '2'], ['E', '3']]);
+    for (const keep of [false, true]) {
+      const p = planRename(l, 'C', 'D', keep);
+      expect(p.serial).toBe('2');
+      expect(p.updates.size).toBe(0);
+    }
+  });
+
+  it('renaming to another place: renumber, or keep everyone else (no shift at the old place)', () => {
+    const l = e([['A', '1'], ['C', '2'], ['E', '3'], ['G', '4']]);
+    const renumber = planRename(l, 'C', 'F', false);
+    expect(renumber.serial).toBe('3');
+    expect([...renumber.updates]).toEqual([['E', '2']]);
+    const keep = planRename(l, 'C', 'F', true);
+    expect(keep.serial).toBe('3A');
+    expect(keep.updates.size).toBe(0);
+    expect(samePlan(renumber, keep)).toBe(false);
+  });
+
+  it('renaming a lettered client in place keeps its letter when keeping numbers', () => {
+    const l = e([['A', '1'], ['B', '1A'], ['C', '2']]);
+    expect(planRename(l, 'B', 'BB', true)).toEqual({ serial: '1A', updates: new Map() });
+    const renumber = planRename(l, 'B', 'BB', false);
+    expect(renumber.serial).toBe('2');
+    expect([...renumber.updates]).toEqual([['C', '3']]);
   });
 });
 

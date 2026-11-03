@@ -51,13 +51,15 @@ that folder.
 | Java program | Web app |
 | --- | --- |
 | Password window, *Change* | Login screen, *Change password* (also in Utility) |
-| Registration steps 2–3 (bill text, index-sheet title) | *Your letterhead* on first run; Utility ▸ *Letterhead* any time |
+| Registration steps 2–3 (bill text, index-sheet title) | *Your letterhead* on first run; Utility ▸ *Letterhead* any time; both with a live preview of a sample bill and index sheet |
 | Main list: year box, S.No./Name/Bill No., Add New, Modify, Delete, OK, Utility, Exit | Same, plus ‹ › year buttons, quick search box, multi-select (Ctrl/Shift-click) |
 | Bill No. typed in the list | Double-click the Bill No. cell |
 | Quick search by typing | Start typing anywhere in the list |
-| Late entry (S.No. like 5A) | Same checkbox in *Add new* and *Modify* |
+| Late entry (S.No. like 5A) | *Add new* and *Modify* show both outcomes for the name typed: the alphabetical S.No. (and whose numbers it shifts) or a lettered one that changes nobody else, for when the year's index sheet or bills are already printed |
 | Bill window: type tabs, bill tabs, Field with drop-down, Amount, last 3 years with totals | Same; drop-down suggestions while typing (Ctrl+Space for all) |
-| Insert Row, Delete Row, Move Up/Down, New Name, New Bill, Print, Done, year box | Same buttons |
+| Insert Row, Delete Row, Move Up/Down | Drag rows by their ⋮⋮ handle; each row's ⋯ menu inserts or deletes; click row numbers to select several (Ctrl/Shift) |
+| New Name (rows for another person, printed with their own subtotal) | *+ Add group*, or ⋯ ▸ *Start a new group from this row*: each group is shown as its own block with its subtotal, as printed. Saved as Java's `New Name` row |
+| New Bill, Print, Done, year box | Same |
 | Bill Utility: delete, rename, print the bills | *Bill utility…* |
 | “Update bill to next year?” on Done | Same question |
 | “File is already open on a computer” (`activelocation.txt`) | Same lock file; can *Open anyway* if a lock was left behind |
@@ -79,9 +81,9 @@ Browsers reserve some of the Java program's shortcuts (Ctrl+N, Ctrl+Q, Ctrl+1…
 | Print bills of selected clients | Ctrl+P |
 | Utility | Alt+U |
 | Exit | Alt+Q |
-| **Bill window:** insert row / delete row | Ctrl+I / Ctrl+Delete |
-| Move row up / down | Alt+↑ / Alt+↓ |
-| New name (group separator) | Ctrl+B |
+| **Bill window:** insert row / delete row (or the selected rows) | Ctrl+I / Ctrl+Delete |
+| Move row (or the selected rows) up / down | Alt+↑ / Alt+↓ |
+| Start a new group at the current row | Ctrl+B |
 | New bill / Bill utility | Alt+N / Alt+U |
 | Print this bill | Ctrl+P |
 | Next year | Alt+→ |
@@ -122,6 +124,8 @@ through the Java program's own windows is opened and printed by the web app.
   existing folder exited it.
 - A Tab character or other control characters in any text corrupted the files.
 - A wrong password was ignored silently.
+- *Modify* with *Late entry* still moved every client after the old place down by one. Keeping
+  the other numbers now keeps all of them; a client renamed without moving keeps its own S.No.
 
 ### Protecting the Java program from a crash in its own code
 

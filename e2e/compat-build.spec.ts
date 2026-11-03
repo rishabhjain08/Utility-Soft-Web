@@ -25,18 +25,23 @@ test('build data with the web app', async ({ page }) => {
   await page.getByRole('button', { name: /Letterhead/ }).click();
   await page.getByLabel(/Address and other lines/).fill('12, Gandhi Road\nNew Delhi - 110001');
   await page.getByLabel(/Firm name and signature/).fill('For JAIN & ASSOCIATES\nChartered Accountants\n\n(Proprietor)');
-  await page.getByPlaceholder('Line 1').fill('INDEX OF BILLS FOR THE YEAR ##');
+  await page.getByLabel('Index sheet title line 1').fill('INDEX OF BILLS FOR THE YEAR ##');
   await page.getByRole('button', { name: 'Save' }).click();
 
   const add = async (name: string, late = false) => {
     await page.getByRole('button', { name: 'Add new' }).click();
     await page.getByLabel('Name').fill(name);
-    if (late) await page.getByLabel(/Late entry/).check();
+    if (late) await page.getByLabel(/keeping everyone else/).check();
     await page.getByRole('button', { name: 'Add', exact: true }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
   };
   await add('Amit Kumar');
   await add('Priya', true);
+  await page.getByRole('button', { name: 'Add new' }).click();
+  await page.getByLabel('Name').fill('Zed');
+  // Last in the list: both ways give the same number, so there is nothing to choose.
+  await expect(page.locator('.serial-single')).toHaveText('S.No. 4 No other client’s S.No. changes.');
+  await page.getByRole('button', { name: 'Cancel' }).click();
   await add('Zed');
   await expectClients(page, ['1|AMIT KUMAR|', '2|PREM|', '2A|PRIYA|', '3|RISHABH|', '4|ZED|']);
   await page.locator('tr', { hasText: 'AMIT KUMAR' }).locator('td.billno').dblclick();

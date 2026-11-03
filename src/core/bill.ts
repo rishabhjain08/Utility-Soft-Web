@@ -125,6 +125,8 @@ export interface HistoryColumn {
   year: string;
   /** Per current row: amounts found in that year ("--" when none), joined with ",". */
   values: string[];
+  /** Per current row: how much it adds to `total` (repeated descriptions count once). */
+  counted: number[];
   total: number;
 }
 
@@ -150,16 +152,27 @@ export function historyColumns(rows: BillRow[], year: string, history: { year: s
         else if (amount !== '') found[i]!.push(amount);
       });
     }
-    let total = 0;
-    found.forEach((vals, i) => {
-      if (vals && firstIdx.get(keys[i]) === i) for (const v of vals) total += amountValue(v);
-    });
-    return { year: y, values: found.map((v) => (v === null ? '--' : v.join(','))), total };
+    const counted = found.map((vals, i) => (vals && firstIdx.get(keys[i]) === i ? vals.reduce((t, v) => t + amountValue(v), 0) : 0));
+    const total = counted.reduce((t, v) => t + v, 0);
+    return { year: y, values: found.map((v) => (v === null ? '--' : v.join(','))), counted, total };
   });
 }
 
 export function billTotal(rows: BillRow[]): number {
   return rows.reduce((t, r) => (isSeparator(r) ? t : t + amountValue(r.amount)), 0);
+}
+
+/**
+ * The bill's groups (Java's "New Name" separators start a new one; printed with
+ * their own subtotals): row indices of each group and the separator starting it.
+ */
+export function rowGroups(rows: BillRow[]): { start: number | null; rows: number[] }[] {
+  const out: { start: number | null; rows: number[] }[] = [{ start: null, rows: [] }];
+  rows.forEach((r, i) => {
+    if (isSeparator(r)) out.push({ start: i, rows: [] });
+    else out[out.length - 1].rows.push(i);
+  });
+  return out;
 }
 
 /** Serial numbers shown in the editor: separators get none. */

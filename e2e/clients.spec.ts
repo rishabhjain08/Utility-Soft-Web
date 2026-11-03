@@ -51,7 +51,10 @@ test('clients: add, late entry, modify, bill no., delete, search, keyboard', asy
   await expect(page.getByRole('button', { name: 'Add', exact: true })).toBeDisabled();
   // Late entry gets a letter and leaves the others alone.
   await page.getByLabel('Name').fill('prakash');
-  await page.getByLabel(/Late entry/).check();
+  await expect(page.getByLabel(/in alphabetical order/)).toBeChecked();
+  await expect(page.locator('.serial-choice')).toContainText('2, in alphabetical order Also changes PREM 2 → 3, RISHABH 3 → 4.');
+  await page.getByLabel(/keeping everyone else/).check();
+  await expect(page.locator('.serial-choice')).toContainText('1A, keeping everyone else’s S.No.');
   await page.getByRole('button', { name: 'Add', exact: true }).click();
   await expectClients(page, ['1|MOHAN|', '1A|PRAKASH|', '2|PREM|', '3|RISHABH|']);
   expect(existsSync(join(dir, 'data/bills/06-07/PRAKASH/Audit'))).toBe(true);
@@ -68,6 +71,8 @@ test('clients: add, late entry, modify, bill no., delete, search, keyboard', asy
   await selectClient(page, 'RISHABH');
   await page.keyboard.press('F2');
   await page.getByLabel('Name').fill('Amit');
+  // First in the list: always S.No. 1, so there is nothing to choose.
+  await expect(page.locator('.serial-single')).toHaveText('S.No. 1 Also changes MOHAN 1 → 2, PRAKASH 1A → 2A, PREM 2 → 3.');
   await page.getByLabel('Bill No.').fill('b-9');
   await page.getByRole('button', { name: 'Save' }).click();
   await expectClients(page, ['1|AMIT|B-9', '2|MOHAN|', '2A|PRAKASH|', '3|PREM|101-103']);

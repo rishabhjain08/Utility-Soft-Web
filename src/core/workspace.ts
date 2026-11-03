@@ -14,7 +14,7 @@ import {
   FsDir, copyTree, ensureDir, findEntry, listDirs, listFiles, removeEntry, tryDir, tryRead, walk, writeFile,
 } from './fs';
 import { BillRow, HistoryColumn, historyColumns, linesFromRows, mergeHistory, protectForJava, rowsFromLines } from './bill';
-import { SerialEntry, planInsert, planRemove } from './serial';
+import { SerialEntry, planInsert, planRemove, planRename } from './serial';
 import { compareIgnoreCase, sameName, sortNames, sortStrings } from './sort';
 import { isYear, nextYear, previousYear, previousYears } from './years';
 
@@ -238,10 +238,7 @@ export class Workspace {
       await this.touch();
       return existing;
     }
-    // Rename: take the client out of the numbering, then insert it under the new name.
-    const removal = planRemove(await this.serialEntries(year), oldName);
-    await this.applySerialUpdates(year, removal);
-    const plan = planInsert(await this.serialEntries(year, oldName), newName, late);
+    const plan = planRename(await this.serialEntries(year), oldName, newName, late);
     await this.applySerialUpdates(year, plan.updates);
     const sameIgnoringCase = sameName(oldName, newName);
     // Case-only renames need a temporary name on case-insensitive disks.

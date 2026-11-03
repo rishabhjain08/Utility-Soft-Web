@@ -108,7 +108,7 @@ describe('workspace on the Java sample data', () => {
       { desc: 'Expenses', amount: '0' },
     ]);
     const hist = await ws.billHistory('07-08', 'RISHABH', 'Audit', 'PREM CHAND', await ws.readBill('07-08', 'RISHABH', 'Audit', 'PREM CHAND'));
-    expect(hist[0]).toEqual({ year: '06-07', values: ['15000', '100'], total: 15100 });
+    expect(hist[0]).toEqual({ year: '06-07', values: ['15000', '100'], counted: [15000, 100], total: 15100 });
     // New bill in 07-08 picks up rows from 06-07.
     await ws.writeBill('06-07', 'PREM', 'Vat', 'GOPAL', [{ desc: 'VAT return', amount: '700' }]);
     await ws.copyClients('06-07', '07-08', ['PREM']);

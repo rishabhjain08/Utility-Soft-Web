@@ -20,8 +20,11 @@ test('a new installation in an empty folder, from first year to printed bill', a
 
   // Letterhead (the Java "registration" steps).
   await expect(page.getByRole('heading', { name: 'Your letterhead' })).toBeVisible();
+  // Until filled in, the preview shows sample lines in grey.
+  await expect(page.locator('.lp.ph-address.ph-firm .bc-address')).toContainText('12, Station Road');
   await page.getByLabel(/Address and other lines/).fill('MG Road, Jaipur');
   await page.getByLabel(/Firm name and signature/).fill('For R. K. & Co.\n\nPartner');
+  await expect(page.locator('.lp:not(.ph-address):not(.ph-firm) .bc-firm')).toContainText('For R. K. & Co.');
   await page.getByRole('button', { name: 'Save' }).click();
 
   // No years yet.
