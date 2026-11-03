@@ -4,16 +4,33 @@ The billing program **Utility Soft**, rebuilt as a web app for Google Chrome (or
 Edge). It works directly on the same folder and files as the original Java program, so both
 versions can be used side by side on the same data, even at the same time on different computers.
 
-## Using it
+## Install
 
-1. Open the app in Chrome: either the hosted page, or `dist/index.html` (a single file you can
-   copy anywhere, for example next to `billing.jar`, and double-click).
-2. Click **Open Utility Soft folder…** and choose the program folder (the one containing
-   `billing.jar`, `pass.txt` and `impinfo.txt`). Chrome asks once for permission to edit files.
-   Next time, **Continue with “…”** reopens it.
-3. Enter the password (the same as in the Java version).
+Copy the **`Utility Soft`** folder from this repository anywhere on the computer
+(Desktop, inside the Java program folder, a USB stick…). That is the whole installation:
+no installer, no internet connection needed.
 
-An empty folder can be set up as a new installation.
+To start, double-click **`Start Utility Soft.cmd`** in that folder. It always opens the app in
+Google Chrome. Opening `Utility Soft.html` with Chrome or Edge works too. To update, copy the
+folder again.
+
+The first time, click **Open Utility Soft folder…** and choose the Java program folder (the
+one with `billing.jar`, `pass.txt` and `impinfo.txt`), allow Chrome to edit files, then enter the
+password. After that the app offers **Continue with “…”** and only asks for the password.
+
+## Password and stored files
+
+- Nothing is shown before the password is entered. It is the same password as the Java
+  version, kept in `pass.txt`, and it can be changed on the password screen
+  (*Change password*) or under Utility.
+- Like the Java version, files are stored scrambled with its simple character-shift scheme:
+  the password, letterhead and bill types (`impinfo.txt`), backup folder (`backupto.txt`),
+  every bill, S.No. and Bill No. This keeps casual readers out; it is not strong encryption.
+- As in the Java version, these are plain text: folder names (years, client names, bill and tab
+  names), the drop-down lists (`ddown.txt`), the data location (`loaddatafrom.txt`) and the list
+  of clients open right now (`activelocation.txt`).
+- The browser itself stores only which folders you chose and one preference (whether to ask
+  for a backup on exit). It stores no bills or passwords.
 
 ### Where the data is
 
@@ -126,7 +143,7 @@ The Java program can't be changed, so the web app keeps the data clear of this:
 ```
 npm install
 npm run dev          # development server
-npm run build        # dist/index.html (single self-contained file)
+npm run build        # builds and updates "Utility Soft/Utility Soft.html" (commit it)
 npm test             # unit and workspace tests (Node, real folders)
 npx playwright test  # end-to-end customer journeys in Chrome
 ```
