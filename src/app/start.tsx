@@ -4,7 +4,7 @@ import { FsDir } from '../core/fs';
 import { Letterhead, readPassword, writeDataPath, writeLetterhead, writePassword } from '../core/config';
 import { ensurePermission, pickFolder, rememberPath, rememberProgram, rememberedProgram, relativeTo, supportsFolders } from './folders';
 import { checkPassword, createProgram, inspectProgram, looksLikeData, prepareDataFolder } from './session';
-import { attempt, busy, confirmDialog, toast } from './ui';
+import { attempt, busy, confirmDialog, promptDialog, toast } from './ui';
 
 // ---------- Welcome: choose the program folder ----------
 
@@ -43,7 +43,7 @@ export function Welcome({ onOpened }: { onOpened: (dir: FsDir, hasPassword: bool
       return;
     }
     setMessage(
-      `"${dir.name}" does not look like the Utility Soft folder (pass.txt and impinfo.txt were not found). Choose the folder that contains billing.jar.`,
+      `"${dir.name}" does not look like the Utility Soft folder (pass.txt and impinfo.txt were not found). Choose the folder that contains billing.jar, or use “Start a new Utility Soft”.`,
     );
   };
 
@@ -52,6 +52,58 @@ export function Welcome({ onOpened }: { onOpened: (dir: FsDir, hasPassword: bool
       setMessage(null);
       const dir = await pickFolder('utility-soft-program');
       if (dir) await use(dir);
+    });
+
+  // A new installation: in the chosen folder when it is empty, otherwise in a new folder inside it.
+  const startNew = () =>
+    attempt(async () => {
+      setMessage(null);
+      const place = await pickFolder('utility-soft-new');
+      if (!place) return;
+      const info = await inspectProgram(place);
+      if (info.kind === 'new') {
+        await rememberProgram(place);
+        onOpened(place, false);
+        return;
+      }
+      if (info.kind === 'program') {
+        const open = await confirmDialog({
+          title: 'Utility Soft is already here',
+          message: (
+            <p>
+              The folder <b>{place.name}</b> already has a Utility Soft. Open it?
+            </p>
+          ),
+          ok: 'Open it',
+        });
+        if (open) await use(place);
+        return;
+      }
+      const taken = new Set((await place.list()).map((e) => e.name.toLowerCase()));
+      let suggestion = 'Utility Soft Files';
+      for (let i = 2; taken.has(suggestion.toLowerCase()); i++) suggestion = `Utility Soft Files ${i}`;
+      const name = await promptDialog({
+        title: 'Start a new Utility Soft',
+        label: 'Name of the new folder',
+        value: suggestion,
+        ok: 'Create',
+        hint: (
+          <>
+            It will be created inside <b>{place.name}</b>.
+          </>
+        ),
+        validate: (v) => {
+          const n = v.trim();
+          if (n === '') return 'Type a name.';
+          if (/[\\/:*?"<>|]/.test(n) || /[. ]$/.test(v)) return 'A folder name cannot contain \\ / : * ? " < > | or end with a dot.';
+          if (taken.has(n.toLowerCase())) return `“${n}” already exists in ${place.name}.`;
+          return null;
+        },
+      });
+      if (name === null) return;
+      const dir = (await place.dir(name.trim(), true)) as FsaDir;
+      await rememberProgram(dir);
+      onOpened(dir, false);
     });
 
   const reopen = () =>
@@ -91,9 +143,13 @@ export function Welcome({ onOpened }: { onOpened: (dir: FsDir, hasPassword: bool
         <button class={remembered ? 'big' : 'primary big'} onClick={choose}>
           {remembered ? 'Open a different folder…' : 'Open Utility Soft folder…'}
         </button>
+        <button class="big" onClick={startNew}>
+          Start a new Utility Soft…
+        </button>
         <p class="hint">
-          Choose the Utility Soft program folder (the one with <code>billing.jar</code>, <code>pass.txt</code> and <code>impinfo.txt</code>).
-          Your files stay on this computer and keep working with the desktop (Java) version.
+          To use your existing bills, open the Utility Soft program folder (the one with <code>billing.jar</code>, <code>pass.txt</code> and{' '}
+          <code>impinfo.txt</code>). To start from nothing, choose where to keep the new files. Your files stay on this computer and keep
+          working with the desktop (Java) version.
         </p>
         {message && <p class="warn">{message}</p>}
       </div>

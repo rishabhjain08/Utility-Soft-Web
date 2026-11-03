@@ -18,6 +18,12 @@ The first time, click **Open Utility Soft folder…** and choose the Java progra
 one with `billing.jar`, `pass.txt` and `impinfo.txt`), allow Chrome to edit files, then enter the
 password. After that the app offers **Continue with “…”** and only asks for the password.
 
+Starting from nothing? Click **Start a new Utility Soft…** and choose where to keep the files
+(Documents, D:\, …). If that folder is empty it is used as it is; otherwise the app creates a new
+folder inside it (named *Utility Soft Files* unless you type another name). Then choose a password
+and fill in your letterhead. To also use the desktop (Java) version later, copy `billing.jar` into
+that folder.
+
 ## Password and stored files
 
 - Nothing is shown before the password is entered. It is the same password as the Java

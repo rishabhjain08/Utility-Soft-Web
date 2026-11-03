@@ -1,8 +1,8 @@
 import { test, expect } from '@playwright/test';
-import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { cipherLines, cipherValue, expectClients, gridRows, printed, start, waitSaved } from './helpers';
+import { cipherLines, cipherValue, expectClients, gridRows, printed, programCopy, start, waitSaved } from './helpers';
 
 test('a new installation in an empty folder, from first year to printed bill', async ({ page }) => {
   const picker = await start(page);
@@ -71,4 +71,48 @@ test('a new installation in an empty folder, from first year to printed bill', a
     'Expenses,1500',
   ]);
   expect(readFileSync(join(dir, 'data/activelocation.txt'), 'latin1')).toBe('26-27,SHARMA TRADERS\r\n');
+});
+
+test('starting a new Utility Soft creates its own folder inside a busy one', async ({ page }) => {
+  const picker = await start(page);
+  const place = mkdtempSync(join(tmpdir(), 'usw-place-'));
+  mkdirSync(join(place, 'Utility Soft Files'));
+  writeFileSync(join(place, 'notes.txt'), 'x');
+
+  picker.next(place);
+  await page.getByRole('button', { name: 'Start a new Utility Soft…' }).click();
+  const name = page.getByLabel('Name of the new folder');
+  await expect(name).toHaveValue('Utility Soft Files 2');
+  await name.fill('notes.TXT');
+  await expect(page.getByText('already exists')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Create' })).toBeDisabled();
+  await name.fill('Billing');
+  await page.getByRole('button', { name: 'Create' }).click();
+
+  await expect(page.getByRole('heading', { name: 'New Utility Soft' })).toBeVisible();
+  await page.getByLabel('Password', { exact: true }).fill('abc');
+  await page.getByLabel('Password again').fill('abc');
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByRole('button', { name: 'Add the first year…' })).toBeVisible();
+
+  expect(readdirSync(place).sort()).toEqual(['Billing', 'Utility Soft Files', 'notes.txt']);
+  expect(readdirSync(join(place, 'Billing')).sort()).toEqual(['backupto.txt', 'data', 'ddown.txt', 'impinfo.txt', 'loaddatafrom.txt', 'pass.txt']);
+  expect(cipherValue(join(place, 'Billing', 'pass.txt'))).toBe('abc');
+});
+
+test('starting a new Utility Soft in an existing one offers to open it', async ({ page }) => {
+  const picker = await start(page);
+  picker.next(programCopy());
+  await page.getByRole('button', { name: 'Start a new Utility Soft…' }).click();
+  await page.getByRole('button', { name: 'Open it' }).click();
+  await expect(page.getByLabel('Password', { exact: true })).toBeVisible();
+});
+
+test('starting a new Utility Soft in an empty folder uses it directly', async ({ page }) => {
+  const picker = await start(page);
+  const dir = mkdtempSync(join(tmpdir(), 'usw-empty-'));
+  picker.next(dir);
+  await page.getByRole('button', { name: 'Start a new Utility Soft…' }).click();
+  await expect(page.getByRole('heading', { name: 'New Utility Soft' })).toBeVisible();
 });

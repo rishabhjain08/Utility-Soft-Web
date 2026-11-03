@@ -28,6 +28,9 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
   const [bills, setBills] = useState<string[]>([]);
   const [bill, setBill] = useState<string | null>(null);
   const [rows, setRows] = useState<BillRow[]>([]);
+  // The bill whose rows are in `rows`: nothing is editable until the open bill has been read,
+  // so typing while it opens cannot overwrite it (or another bill) with the rows on screen.
+  const [loadedKey, setLoadedKey] = useState('');
   const [history, setHistory] = useState<{ year: string; lines: string[] | null }[]>([]);
   const [suggest, setSuggest] = useState<string[]>([]);
   const [focus, setFocus] = useState<{ row: number; col: 'desc' | 'amount' }>({ row: 0, col: 'desc' });
@@ -62,6 +65,7 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
   };
 
   const update = (next: BillRow[]) => {
+    if (!ready) return;
     setRows(next);
     pending.current = { key: keyOf(year, type, bill), rows: next };
     setSaveState('saving');
@@ -129,6 +133,7 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
       );
       if (!live) return;
       setRows(r);
+      setLoadedKey(keyOf(year, type, bill));
       setHistory(h);
       setFocus({ row: 0, col: 'desc' });
     });
@@ -141,6 +146,7 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
     };
   }, [bill, year, typeIdx, exists]);
 
+  const ready = bill !== null && loadedKey === keyOf(year, type, bill);
   const columns: HistoryColumn[] = useMemo(() => historyColumns(rows, year, history), [rows, history, year]);
   const numbers = useMemo(() => rowNumbers(rows), [rows]);
   const total = billTotal(rows);
@@ -332,7 +338,7 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
   keyRef.current = onKey;
   const yIdx = years.indexOf(year);
   const hist = columns.length ? columns : previousYears(year, 3).map((y) => ({ year: y, values: rows.map(() => '--'), total: 0 }));
-  const shown = [...rows, blank()];
+  const shown = ready ? [...rows, blank()] : [];
 
   return (
     <div class="screen editor">
