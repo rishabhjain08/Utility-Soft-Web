@@ -1094,8 +1094,8 @@ export async function confirmNextYearCopy(s: Session, year: string, name: string
 /** Six dots: the usual sign that something can be dragged. */
 function Grip() {
   return (
-    <svg class="grip-dots" width="8" height="14" viewBox="0 0 8 14" aria-hidden="true">
-      {[2, 7, 12].map((y) => [<circle key={`a${y}`} cx="2" cy={y} r="1.3" />, <circle key={`b${y}`} cx="6" cy={y} r="1.3" />])}
+    <svg class="grip-dots" width="10" height="16" viewBox="0 0 10 16" aria-hidden="true">
+      {[2.5, 8, 13.5].map((y) => [<circle key={`a${y}`} cx="2.5" cy={y} r="1.8" />, <circle key={`b${y}`} cx="7.5" cy={y} r="1.8" />])}
     </svg>
   );
 }

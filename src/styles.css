@@ -489,17 +489,17 @@ table.grid tbody td {
   background-color: var(--paper);
 }
 table.grid .grip {
-  width: 24px;
+  width: 28px;
   text-align: center;
 }
 .grip-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
+  width: 22px;
   height: 28px;
   cursor: grab;
-  color: #b4bfc8;
+  color: var(--muted);
   border-radius: 3px;
   touch-action: none;
 }
@@ -513,7 +513,7 @@ table.grid .grip {
 }
 table.grid tr:hover .grip-btn,
 table.grid tr.current .grip-btn {
-  color: var(--muted);
+  color: var(--ink);
 }
 .grip-btn:hover {
   background: var(--ledger-soft);
