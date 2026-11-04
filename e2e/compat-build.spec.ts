@@ -3,9 +3,10 @@
 import { test, expect, Page } from '@playwright/test';
 import { cpSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { FIXTURES, expectClients, gridRows, login, start, waitSaved } from './helpers';
+import { FIXTURES, expectClients, exportTo, gridRows, login, migrateTo, start, waitSaved } from './helpers';
 
-export const COMPAT_WEB = join(import.meta.dirname, '..', '.tmp', 'compat-web');
+const TMP = join(import.meta.dirname, '..', '.tmp');
+export const COMPAT_WEB = join(TMP, 'compat-web');
 
 async function cell(page: Page, row: number, col: 'desc' | 'amount', text: string) {
   const el = page.locator(`.grid [data-row="${row}"][data-col="${col}"]`);
@@ -14,13 +15,31 @@ async function cell(page: Page, row: number, col: 'desc' | 'amount', text: strin
   await page.keyboard.press('Escape');
 }
 
-test('build data with the web app', async ({ page }) => {
-  rmSync(COMPAT_WEB, { recursive: true, force: true });
-  mkdirSync(COMPAT_WEB, { recursive: true });
-  cpSync(join(FIXTURES, 'java-sample'), COMPAT_WEB, { recursive: true });
+const fresh = (dir: string) => {
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  return dir;
+};
+
+test('build data with the web app on the desktop files', async ({ page }) => {
+  cpSync(join(FIXTURES, 'java-sample'), fresh(COMPAT_WEB), { recursive: true });
   const picker = await start(page);
   await login(page, picker, COMPAT_WEB);
+  await journey(page);
+});
 
+// The same in the web format: moved from the desktop files, then exported for the desktop version.
+test('build data in the web format and export it', async ({ page }) => {
+  const src = join(TMP, 'compat-src');
+  cpSync(join(FIXTURES, 'java-sample'), fresh(src), { recursive: true });
+  const picker = await start(page);
+  await login(page, picker, src, 'puja', false);
+  await migrateTo(page, picker, fresh(join(TMP, 'compat-webstore')));
+  await journey(page);
+  await exportTo(page, picker, fresh(join(TMP, 'compat-export')));
+});
+
+async function journey(page: Page) {
   await page.getByRole('button', { name: 'Utility…' }).click();
   await page.getByRole('button', { name: /Letterhead/ }).click();
   await page.getByLabel(/Address and other lines/).fill('12, Gandhi Road\nNew Delhi - 110001');
@@ -117,4 +136,4 @@ test('build data with the web app', async ({ page }) => {
   await dd.getByLabel('Entry 1').fill('GST return for ##');
   await dd.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByText('Drop-down lists saved.')).toBeVisible();
-});
+}

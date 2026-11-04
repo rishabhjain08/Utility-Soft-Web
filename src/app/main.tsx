@@ -379,7 +379,10 @@ export function Main({ s, year, setYear, onOpen, onExit, onSession, focusName }:
           {selected.size > 1 ? ` · ${selected.size} selected` : ''}
         </span>
         <span class="grow" />
-        <span title="Data loaded from">Data: {s.dataLabel}</span>
+        <span title="Data loaded from">
+          Data: {s.dataLabel}
+          {s.ws.kind === 'desktop' && <span class="format-badge" title="Working on the desktop (Java) version's files. Utility ▸ Move to the new format makes a copy in the web format."> · desktop format</span>}
+        </span>
       </footer>
 
       {dialog?.kind === 'add' && year && (

@@ -8,7 +8,8 @@ import {
   decodeCipherLines, decodeCipherValue, decodePlainLines, encodeCipherLines, encodeCipherValue, encodePlainLines,
 } from './codec';
 import {
-  BillType, billTypesFromImpinfo, dropdownItems, readDropdownLines, readImpinfo, writeBillTypes,
+  BillType, Letterhead, billTypesFromImpinfo, dropdownItems, letterheadFromImpinfo, readBackupPath, readDropdownLines, readImpinfo,
+  readPassword, writeBackupPath, writeBillTypes, writeDropdowns, writeLetterhead, writePassword,
 } from './config';
 import {
   FsDir, copyTree, ensureDir, findEntry, listDirs, listFiles, removeEntry, tryDir, tryRead, walk, writeFile,
@@ -17,6 +18,7 @@ import { BillRow, HistoryColumn, historyColumns, linesFromRows, mergeHistory, pr
 import { SerialEntry, planInsert, planRemove, planRename } from './serial';
 import { compareIgnoreCase, sameName, sortNames, sortStrings } from './sort';
 import { isYear, nextYear, previousYear, previousYears } from './years';
+import { UserError, checkName, checkTabName } from './names';
 
 export interface CheckResult {
   checked: number;
@@ -36,22 +38,9 @@ export interface Client {
   billNo: string;
 }
 
-export class UserError extends Error {}
+export { UserError, checkName };
 
-const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
-
-/** Validates a client, bill or tab name that becomes a file or folder name. */
-export function checkName(name: string, what = 'Name'): string {
-  const n = name.trim();
-  if (n === '') throw new UserError(`${what} cannot be empty.`);
-  if (/[<>:"/\\|?*\x00-\x1f]/.test(n)) throw new UserError(`${what} cannot contain any of  < > : " / \\ | ? *`);
-  if (/[.]$/.test(n)) throw new UserError(`${what} cannot end with a dot.`);
-  if (WINDOWS_RESERVED.test(n)) throw new UserError(`"${n}" is a reserved name on Windows.`);
-  if (n.length > 120) throw new UserError(`${what} is too long.`);
-  return n;
-}
-
-async function mapLimit<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {
+export async function mapLimit<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
   let next = 0;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
@@ -64,7 +53,31 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R
   return out;
 }
 
+/** Bill-type folders found in the clients of the most recent year that has any. */
+export async function billTypeFoldersOnDisk(data: FsDir): Promise<string[]> {
+  const bills = await tryDir(data, BILLS);
+  if (!bills) return [];
+  const found: string[] = [];
+  for (const year of sortStrings((await listDirs(bills)).filter(isYear)).reverse()) {
+    const y = await bills.dir(year);
+    for (const c of await listDirs(y)) {
+      for (const f of await listDirs(await y.dir(c))) if (!found.some((x) => sameName(x, f))) found.push(f);
+    }
+    if (found.length) break;
+  }
+  return found;
+}
+
+/** The bill types of a desktop folder; when impinfo.txt lists none, the folders on disk (see repairBillTypes). */
+export async function desktopBillTypes(program: FsDir, data: FsDir | null): Promise<BillType[]> {
+  const types = billTypesFromImpinfo(await readImpinfo(program));
+  if (types.length || !data) return types;
+  return (await billTypeFoldersOnDisk(data)).map((f) => ({ folder: f, tab: f }));
+}
+
+/** The desktop (Java) program's own files: see the layout above and core/config.ts. */
 export class Workspace {
+  readonly kind = 'desktop' as const;
   constructor(readonly program: FsDir, readonly data: FsDir) {}
 
   // ---------- configuration ----------
@@ -80,14 +93,7 @@ export class Workspace {
   async repairBillTypes(): Promise<boolean> {
     const lines = await readImpinfo(this.program);
     if (!lines || billTypesFromImpinfo(lines).length > 0) return false;
-    const found: string[] = [];
-    for (const year of (await this.years()).reverse()) {
-      const y = await this.yearDir(year);
-      for (const c of await listDirs(y)) {
-        for (const f of await listDirs(await y.dir(c))) if (!found.some((x) => sameName(x, f))) found.push(f);
-      }
-      if (found.length) break;
-    }
+    const found = await billTypeFoldersOnDisk(this.data);
     if (!found.length) return false;
     await writeBillTypes(this.program, found.map((f) => ({ folder: f, tab: f })));
     return true;
@@ -95,6 +101,34 @@ export class Workspace {
 
   async dropdown(tab: string, year: string): Promise<string[]> {
     return dropdownItems(await readDropdownLines(this.program), tab).map((s) => s.split('##').join(year));
+  }
+
+  async saveDropdowns(types: BillType[], lists: Map<string, string[]>): Promise<void> {
+    await writeDropdowns(this.program, types, lists);
+  }
+
+  async letterhead(): Promise<Letterhead | null> {
+    return letterheadFromImpinfo(await readImpinfo(this.program));
+  }
+
+  async saveLetterhead(lh: Letterhead): Promise<void> {
+    await writeLetterhead(this.program, lh);
+  }
+
+  async checkPassword(password: string): Promise<boolean> {
+    return (await readPassword(this.program)) === password;
+  }
+
+  async setPassword(password: string): Promise<void> {
+    await writePassword(this.program, password);
+  }
+
+  async backupPath(): Promise<string> {
+    return readBackupPath(this.program);
+  }
+
+  async setBackupPath(path: string): Promise<void> {
+    await writeBackupPath(this.program, path);
   }
 
   // ---------- years ----------
@@ -298,11 +332,14 @@ export class Workspace {
     await this.saveLines(year, client, folder, bill, linesFromRows(rows, year));
   }
 
+  /** The same bill in the three previous years (raw lines, null where there is none). */
+  async historyLines(year: string, client: string, folder: string, bill: string): Promise<{ year: string; lines: string[] | null }[]> {
+    return Promise.all(previousYears(year, 3).map(async (y) => ({ year: y, lines: await this.readBillLines(y, client, folder, bill) })));
+  }
+
   /** Amounts of the same bill in the three previous years. */
   async billHistory(year: string, client: string, folder: string, bill: string, rows: BillRow[]): Promise<HistoryColumn[]> {
-    const years = previousYears(year, 3);
-    const history = await Promise.all(years.map(async (y) => ({ year: y, lines: await this.readBillLines(y, client, folder, bill) })));
-    return historyColumns(rows, year, history);
+    return historyColumns(rows, year, await this.historyLines(year, client, folder, bill));
   }
 
   /** Utility "New Bill": creates an empty bill pre-filled with rows from earlier years. */
@@ -497,10 +534,8 @@ export class Workspace {
   // ---------- bill types (tabs) ----------
 
   async addBillType(rawName: string): Promise<void> {
-    const name = checkName(rawName, 'Tab name');
-    if (/[()^%]/.test(name)) throw new UserError('Tab name cannot contain ( ) ^ or %');
     const types = await this.billTypes();
-    if (types.some((t) => sameName(t.tab, name) || sameName(t.folder, name))) throw new UserError('This tab name already exists.');
+    const name = checkTabName(rawName, types);
     const bills = await this.billsDir();
     for (const year of await listDirs(bills)) {
       if (!isYear(year)) continue;

@@ -105,3 +105,41 @@ export async function listDirs(dir: FsDir): Promise<string[]> {
 export async function listFiles(dir: FsDir): Promise<string[]> {
   return (await dir.list()).filter((e) => e.kind === 'file').map((e) => e.name);
 }
+
+export class ReadOnlyError extends Error {
+  constructor(what: string) {
+    super(`Not changed (read only): ${what}`);
+    this.name = 'ReadOnlyError';
+  }
+}
+
+/**
+ * The same folder, but every attempt to write, create or remove anything in it
+ * (or below it) throws. Used for the desktop folder while it is migrated or
+ * compared, so it cannot be changed even by mistake.
+ */
+export function readOnly(dir: FsDir): FsDir {
+  const ro: FsDir = {
+    get name() {
+      return dir.name;
+    },
+    list: () => dir.list(),
+    async dir(name: string, create = false) {
+      try {
+        return readOnly(await dir.dir(name, false));
+      } catch (e) {
+        if (create && isNotFound(e)) throw new ReadOnlyError(name);
+        throw e;
+      }
+    },
+    read: (name: string) => dir.read(name),
+    async write(name: string) {
+      throw new ReadOnlyError(name);
+    },
+    async remove(name: string) {
+      throw new ReadOnlyError(name);
+    },
+  };
+  if (dir.resolve) ro.resolve = (other: FsDir) => dir.resolve!(other);
+  return ro;
+}

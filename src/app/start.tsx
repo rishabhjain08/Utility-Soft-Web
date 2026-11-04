@@ -1,15 +1,19 @@
 import { useEffect, useState } from 'preact/hooks';
 import { FsaDir } from '../core/fsa';
 import { FsDir } from '../core/fs';
-import { Letterhead, readPassword, writeDataPath, writeLetterhead, writePassword } from '../core/config';
+import { Letterhead, writeDataPath, writePassword } from '../core/config';
+import { createStore } from '../core/webstore';
 import { ensurePermission, pickFolder, rememberPath, rememberProgram, rememberedProgram, relativeTo, supportsFolders } from './folders';
-import { checkPassword, createProgram, inspectProgram, looksLikeData, prepareDataFolder } from './session';
-import { attempt, busy, confirmDialog, promptDialog, toast } from './ui';
+import { PasswordStore, Place, inspectProgram, looksLikeData, passwordStore, prepareDataFolder } from './session';
+import { attempt, busy, confirmDialog, toast } from './ui';
+import { chooseNewFolder } from './migrate';
 import { LetterheadPart, LetterheadPreview, SAMPLE } from './letterhead-preview';
 
-// ---------- Welcome: choose the program folder ----------
+// ---------- Welcome: choose the folder ----------
 
-export function Welcome({ onOpened }: { onOpened: (dir: FsDir, hasPassword: boolean) => void }) {
+export type OpenedKind = 'desktop' | 'web' | 'new';
+
+export function Welcome({ onOpened }: { onOpened: (dir: FsDir, kind: OpenedKind, hasPassword: boolean) => void }) {
   const [remembered, setRemembered] = useState<FileSystemDirectoryHandle | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -19,9 +23,9 @@ export function Welcome({ onOpened }: { onOpened: (dir: FsDir, hasPassword: bool
 
   const use = async (dir: FsaDir) => {
     const info = await inspectProgram(dir);
-    if (info.kind === 'program') {
+    if (info.kind === 'program' || info.kind === 'web') {
       await rememberProgram(dir);
-      onOpened(dir, info.hasPassword);
+      onOpened(dir, info.kind === 'web' ? 'web' : 'desktop', info.hasPassword);
       return;
     }
     if (info.kind === 'new') {
@@ -32,19 +36,19 @@ export function Welcome({ onOpened }: { onOpened: (dir: FsDir, hasPassword: bool
             <p>
               The folder <b>{dir.name}</b> is empty. Set up a new Utility Soft here?
             </p>
-            <p class="hint">To use your existing bills, choose the folder that has billing.jar, pass.txt and impinfo.txt instead.</p>
+            <p class="hint">To use your existing bills, choose the folder that has them instead.</p>
           </>
         ),
         ok: 'Set up here',
       });
       if (ok) {
         await rememberProgram(dir);
-        onOpened(dir, false);
+        onOpened(dir, 'new', false);
       }
       return;
     }
     setMessage(
-      `"${dir.name}" does not look like the Utility Soft folder (pass.txt and impinfo.txt were not found). Choose the folder that contains billing.jar, or use “Start a new Utility Soft”.`,
+      `"${dir.name}" does not look like a Utility Soft folder. Choose the folder with your Utility Soft data, or the desktop program folder (the one with billing.jar, pass.txt and impinfo.txt), or use “Start a new Utility Soft”.`,
     );
   };
 
@@ -59,52 +63,30 @@ export function Welcome({ onOpened }: { onOpened: (dir: FsDir, hasPassword: bool
   const startNew = () =>
     attempt(async () => {
       setMessage(null);
-      const place = await pickFolder('utility-soft-new');
-      if (!place) return;
-      const info = await inspectProgram(place);
-      if (info.kind === 'new') {
-        await rememberProgram(place);
-        onOpened(place, false);
-        return;
-      }
-      if (info.kind === 'program') {
-        const open = await confirmDialog({
-          title: 'Utility Soft is already here',
-          message: (
-            <p>
-              The folder <b>{place.name}</b> already has a Utility Soft. Open it?
-            </p>
-          ),
-          ok: 'Open it',
-        });
-        if (open) await use(place);
-        return;
-      }
-      const taken = new Set((await place.list()).map((e) => e.name.toLowerCase()));
-      let suggestion = 'Utility Soft Files';
-      for (let i = 2; taken.has(suggestion.toLowerCase()); i++) suggestion = `Utility Soft Files ${i}`;
-      const name = await promptDialog({
+      const dir = await chooseNewFolder({
+        id: 'utility-soft-new',
         title: 'Start a new Utility Soft',
-        label: 'Name of the new folder',
-        value: suggestion,
-        ok: 'Create',
-        hint: (
-          <>
-            It will be created inside <b>{place.name}</b>.
-          </>
-        ),
-        validate: (v) => {
-          const n = v.trim();
-          if (n === '') return 'Type a name.';
-          if (/[\\/:*?"<>|]/.test(n) || /[. ]$/.test(v)) return 'A folder name cannot contain \\ / : * ? " < > | or end with a dot.';
-          if (taken.has(n.toLowerCase())) return `“${n}” already exists in ${place.name}.`;
+        suggestion: 'Utility Soft Files',
+        check: async (place) => {
+          const info = await inspectProgram(place);
+          if (info.kind === 'new') return place;
+          if (info.kind === 'not-program') return undefined;
+          const open = await confirmDialog({
+            title: 'Utility Soft is already here',
+            message: (
+              <p>
+                The folder <b>{place.name}</b> already has a Utility Soft. Open it?
+              </p>
+            ),
+            ok: 'Open it',
+          });
+          if (open) await use(place);
           return null;
         },
       });
-      if (name === null) return;
-      const dir = (await place.dir(name.trim(), true)) as FsaDir;
+      if (!dir) return;
       await rememberProgram(dir);
-      onOpened(dir, false);
+      onOpened(dir, 'new', false);
     });
 
   const reopen = () =>
@@ -148,9 +130,9 @@ export function Welcome({ onOpened }: { onOpened: (dir: FsDir, hasPassword: bool
           Start a new Utility Soft…
         </button>
         <p class="hint">
-          To use your existing bills, open the Utility Soft program folder (the one with <code>billing.jar</code>, <code>pass.txt</code> and{' '}
-          <code>impinfo.txt</code>). To start from nothing, choose where to keep the new files. Your files stay on this computer and keep
-          working with the desktop (Java) version.
+          To use your existing bills, open the folder with your Utility Soft data, or the desktop program folder (the one with{' '}
+          <code>billing.jar</code>, <code>pass.txt</code> and <code>impinfo.txt</code>). To start from nothing, choose where to keep the new
+          files. Your files stay on this computer.
         </p>
         {message && <p class="warn">{message}</p>}
       </div>
@@ -160,7 +142,7 @@ export function Welcome({ onOpened }: { onOpened: (dir: FsDir, hasPassword: bool
 
 // ---------- Login ----------
 
-export function Login({ program, onLogin, onBack }: { program: FsDir; onLogin: () => void; onBack: () => void }) {
+export function Login({ place, onLogin, onBack }: { place: Place; onLogin: (password: string) => void; onBack: () => void }) {
   const [pw, setPw] = useState('');
   const [error, setError] = useState(false);
   const [changing, setChanging] = useState(false);
@@ -168,7 +150,7 @@ export function Login({ program, onLogin, onBack }: { program: FsDir; onLogin: (
   const submit = (e: Event) => {
     e.preventDefault();
     attempt(async () => {
-      if (await checkPassword(program, pw)) onLogin();
+      if (await passwordStore(place).checkPassword(pw)) onLogin(pw);
       else {
         setError(true);
         setPw('');
@@ -176,13 +158,13 @@ export function Login({ program, onLogin, onBack }: { program: FsDir; onLogin: (
     });
   };
 
-  if (changing) return <ChangePassword program={program} onDone={() => setChanging(false)} />;
+  if (changing) return <ChangePassword store={passwordStore(place)} onDone={() => setChanging(false)} />;
 
   return (
     <div class="start">
       <form class="card" onSubmit={submit}>
         <h1>Utility Soft</h1>
-        <p class="lead">{program.name}</p>
+        <p class="lead">{place.dir.name}</p>
         <label class="field">
           <span>Password</span>
           <input type="password" autoFocus value={pw} onInput={(e) => (setPw((e.target as HTMLInputElement).value), setError(false))} />
@@ -204,7 +186,7 @@ export function Login({ program, onLogin, onBack }: { program: FsDir; onLogin: (
   );
 }
 
-export function ChangePassword({ program, onDone }: { program: FsDir; onDone: () => void }) {
+export function ChangePassword({ store, onDone }: { store: PasswordStore; onDone: () => void }) {
   const [old, setOld] = useState('');
   const [a, setA] = useState('');
   const [b, setB] = useState('');
@@ -212,10 +194,10 @@ export function ChangePassword({ program, onDone }: { program: FsDir; onDone: ()
   const submit = (e: Event) => {
     e.preventDefault();
     attempt(async () => {
-      if ((await readPassword(program)) !== old) return setError('The old password is wrong.');
+      if (!(await store.checkPassword(old))) return setError('The old password is wrong.');
       if (a === '') return setError('The new password cannot be empty.');
       if (a !== b) return setError('The two new passwords do not match.');
-      await writePassword(program, a);
+      await store.setPassword(a);
       toast('Password changed.', 'ok');
       onDone();
     });
@@ -250,8 +232,8 @@ export function ChangePassword({ program, onDone }: { program: FsDir; onDone: ()
   );
 }
 
-/** First run in a folder without pass.txt. */
-export function SetPassword({ program, isNew, onDone, onBack }: { program: FsDir; isNew: boolean; onDone: () => void; onBack: () => void }) {
+/** First run: a new installation (in the web format), or a desktop folder without pass.txt. */
+export function SetPassword({ program, isNew, onDone, onBack }: { program: FsDir; isNew: boolean; onDone: (password: string) => void; onBack: () => void }) {
   const [a, setA] = useState('');
   const [b, setB] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -260,9 +242,9 @@ export function SetPassword({ program, isNew, onDone, onBack }: { program: FsDir
     if (a === '') return setError('Choose a password.');
     if (a !== b) return setError('The two passwords do not match.');
     busy('Setting up…', async () => {
-      if (isNew) await createProgram(program, a);
+      if (isNew) await createStore(program, a);
       else await writePassword(program, a);
-      onDone();
+      onDone(a);
     });
   };
   return (
@@ -295,9 +277,9 @@ export function SetPassword({ program, isNew, onDone, onBack }: { program: FsDir
 // ---------- Letterhead (Java "Registration") ----------
 
 export function LetterheadForm({
-  program, initial, onDone, onSkip, embedded,
+  save: store, initial, onDone, onSkip, embedded,
 }: {
-  program: FsDir;
+  save: (lh: Letterhead) => Promise<void>;
   initial: Letterhead | null;
   onDone: () => void;
   onSkip?: () => void;
@@ -316,7 +298,7 @@ export function LetterheadForm({
   const save = (e: Event) => {
     e.preventDefault();
     attempt(async () => {
-      await writeLetterhead(program, { firmName: lines(name), firmAddress: lines(address), indexTitles: [titles[0], titles[1], titles[2]] });
+      await store({ firmName: lines(name), firmAddress: lines(address), indexTitles: [titles[0], titles[1], titles[2]] });
       toast('Letterhead saved.', 'ok');
       onDone();
     });

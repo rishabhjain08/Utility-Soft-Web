@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'preact/hooks';
 import { FsDir, ensureDir, walk } from '../core/fs';
-import { isRelativePath, pathParts, readBackupPath, readPassword, writeBackupPath, writeDataPath, writePassword } from '../core/config';
+import { isRelativePath, pathParts, writeDataPath } from '../core/config';
 import { Client, backupFolderName } from '../core/workspace';
-import { Session, looksLikeData, openSession, prepareDataFolder, refreshSession } from './session';
+import { PasswordStore, Session, looksLikeData, openSession, prepareDataFolder, refreshSession } from './session';
+import { compareFlow, exportFlow, migrateFlow } from './migrate';
 import { DropdownDialog } from './dialogs';
 import { LetterheadForm } from './start';
 import { Prefs, hasRememberedPath, loadPrefs, pickFolder, rememberPath, rememberedPath, relativeTo, savePrefs } from './folders';
@@ -30,7 +31,7 @@ export function UtilityDialog({ s, year, selection, onClose, onCopy, onNextYear,
     return (
       <Modal title="Letterhead" onClose={() => setSub(null)} class="letterhead-modal">
         <LetterheadForm
-          program={s.program}
+          save={(lh) => s.ws.saveLetterhead(lh)}
           initial={s.letterhead}
           embedded
           onSkip={() => setSub(null)}
@@ -38,7 +39,7 @@ export function UtilityDialog({ s, year, selection, onClose, onCopy, onNextYear,
         />
       </Modal>
     );
-  if (sub === 'password') return <ChangePasswordDialog program={s.program} onClose={() => setSub(null)} onDone={onClose} />;
+  if (sub === 'password') return <ChangePasswordDialog store={s.ws} onClose={() => setSub(null)} onDone={(password) => onSession({ ...s, password })} />;
   if (sub === 'backup') return <BackupDialog s={s} onClose={() => setSub(null)} />;
   if (sub === 'data') return <DataLocationDialog s={s} onClose={() => setSub(null)} onSession={onSession} />;
 
@@ -59,6 +60,7 @@ export function UtilityDialog({ s, year, selection, onClose, onCopy, onNextYear,
 
   const checkAll = () =>
     busy('Checking bills…', async () => {
+      if (s.ws.kind !== 'desktop') return;
       const r = await s.ws.protectAll((p) => setBusyLabel(`Checking bills… ${p.checked}`));
       toast(
         r.fixed
@@ -66,6 +68,13 @@ export function UtilityDialog({ s, year, selection, onClose, onCopy, onNextYear,
           : `Checked ${r.checked} bills; the desktop version can open all of them.`,
         'ok',
       );
+    });
+
+  const desktop = s.ws.kind === 'desktop';
+  const migrate = () =>
+    attempt(async () => {
+      const ns = await migrateFlow(s.program, s.password);
+      if (ns) onSession(ns);
     });
 
   const item = (label: string, help: string, fn: () => void, disabled = false) => (
@@ -96,8 +105,15 @@ export function UtilityDialog({ s, year, selection, onClose, onCopy, onNextYear,
         <section>
           <h3>Backup</h3>
           {item('Backup and auto-backup…', 'Back up now, or choose where to back up when exiting.', () => setSub('backup'))}
-          {item('Data location…', `Currently: ${s.dataLabel}`, () => setSub('data'))}
-          {item('Check bills for the desktop version', 'Fix bills the Java version could not open. Also runs each time you open Utility Soft.', checkAll)}
+          {desktop && item('Data location…', `Currently: ${s.dataLabel}`, () => setSub('data'))}
+          {desktop && item('Check bills for the desktop version', 'Fix bills the Java version could not open. Also runs each time you open Utility Soft.', checkAll)}
+        </section>
+        <section>
+          <h3>Desktop version</h3>
+          {desktop
+            ? item('Move to the new format…', 'Copy everything into a new folder in the web format, checked file by file. This folder is not changed.', migrate)
+            : item('Export for the desktop version…', 'Write everything into a new folder in the desktop (Java) format, and check it.', () => attempt(() => exportFlow(s)))}
+          {!desktop && item('Compare with a desktop folder…', 'List every difference between a desktop folder and this data.', () => attempt(() => compareFlow(s)))}
         </section>
         <section>
           <h3>Setup</h3>
@@ -115,19 +131,19 @@ export function UtilityDialog({ s, year, selection, onClose, onCopy, onNextYear,
   );
 }
 
-function ChangePasswordDialog({ program, onClose, onDone }: { program: FsDir; onClose: () => void; onDone: () => void }) {
+function ChangePasswordDialog({ store, onClose, onDone }: { store: PasswordStore; onClose: () => void; onDone: (password: string) => void }) {
   const [old, setOld] = useState('');
   const [a, setA] = useState('');
   const [b, setB] = useState('');
   const [error, setError] = useState<string | null>(null);
   const submit = () =>
     attempt(async () => {
-      if ((await readPassword(program)) !== old) return setError('The old password is wrong.');
+      if (!(await store.checkPassword(old))) return setError('The old password is wrong.');
       if (a === '') return setError('The new password cannot be empty.');
       if (a !== b) return setError('The two new passwords do not match.');
-      await writePassword(program, a);
+      await store.setPassword(a);
       toast('Password changed.', 'ok');
-      onDone();
+      onDone(a);
     });
   const field = (label: string, v: string, set: (v: string) => void, auto = false) => (
     <label class="field">
@@ -165,6 +181,8 @@ const ABSOLUTE = /^([a-zA-Z]:[\\/]|\\\\|\/)/;
  * relative when inside the program folder, otherwise typed by the user.
  */
 async function pathForJava(s: Session, dir: FsDir, what: string, current: string): Promise<string | null> {
+  // The web format only needs a name to show; the folder itself is remembered by the browser.
+  if (s.ws.kind === 'web') return dir.name;
   const rel = await relativeTo(s.program, dir);
   if (rel !== null) return rel;
   return promptDialog({
@@ -184,7 +202,7 @@ async function pathForJava(s: Session, dir: FsDir, what: string, current: string
 /** The folder for a path stored by the Java program, asking for it if needed. */
 async function folderForPath(s: Session, kind: 'data' | 'backup', path: string): Promise<FsDir | null> {
   if (!path) return null;
-  if (isRelativePath(path)) {
+  if (s.ws.kind === 'desktop' && isRelativePath(path)) {
     const parts = pathParts(path);
     let d: FsDir | null = s.program;
     for (const p of parts) d = d ? await ensureDir(d, p) : null;
@@ -209,7 +227,7 @@ async function folderForPath(s: Session, kind: 'data' | 'backup', path: string):
 
 /** Automatic backup into <backup folder>\<date+time> (on exit). Returns false if cancelled. */
 export async function autoBackup(s: Session): Promise<boolean> {
-  const path = await readBackupPath(s.program);
+  const path = await s.ws.backupPath();
   if (!path) return true;
   const dir = await folderForPath(s, 'backup', path);
   if (!dir) return false;
@@ -229,9 +247,9 @@ function BackupDialog({ s, onClose }: { s: Session; onClose: () => void }) {
   const [prefs, setPrefs] = useState<Prefs | null>(null);
   const load = () =>
     attempt(async () => {
-      const p = await readBackupPath(s.program);
+      const p = await s.ws.backupPath();
       setPath(p);
-      setLinked(isRelativePath(p) || (await hasRememberedPath('backup', p)));
+      setLinked((s.ws.kind === 'desktop' && isRelativePath(p)) || (await hasRememberedPath('backup', p)));
       setPrefs(await loadPrefs());
     });
   useEffect(() => {
@@ -255,8 +273,8 @@ function BackupDialog({ s, onClose }: { s: Session; onClose: () => void }) {
       if (!dir) return;
       const text = await pathForJava(s, dir, 'backup folder', path ?? '');
       if (text === null) return;
-      if (!isRelativePath(text)) await rememberPath('backup', text, dir);
-      await writeBackupPath(s.program, text);
+      if (s.ws.kind === 'web' || !isRelativePath(text)) await rememberPath('backup', text, dir);
+      await s.ws.setBackupPath(text);
       toast('Auto-backup folder saved.', 'ok');
       load();
     });
@@ -329,7 +347,7 @@ function DataLocationDialog({ s, onClose, onSession }: { s: Session; onClose: ()
       }
       const label = isRelativePath(text) ? `${s.program.name}\\${text}` : text;
       toast(`Data is now loaded from ${label}.`, 'ok');
-      onSession(await openSession(s.program, dir, label));
+      onSession(await openSession(s.program, dir, label, s.password));
     });
   const useDefault = () =>
     attempt(async () => {
@@ -339,7 +357,7 @@ function DataLocationDialog({ s, onClose, onSession }: { s: Session; onClose: ()
       await writeDataPath(s.program, '');
       const label = `${s.program.name}\\data`;
       toast(`Data is now loaded from ${label}.`, 'ok');
-      onSession(await openSession(s.program, data, label));
+      onSession(await openSession(s.program, data, label, s.password));
     });
   return (
     <Modal title="Data location" onClose={onClose} footer={<button onClick={onClose}>Close</button>}>

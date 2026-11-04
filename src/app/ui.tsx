@@ -150,7 +150,8 @@ export function Modal({ title, onClose, children, footer, wide, locked, class: c
 
 // ---------- imperative dialogs (confirm / prompt) ----------
 
-function mount<T>(build: (done: (v: T) => void) => ComponentChildren): Promise<T> {
+/** Shows a dialog built by `build` until it calls `done`. */
+export function mountDialog<T>(build: (done: (v: T) => void) => ComponentChildren): Promise<T> {
   return new Promise((resolve) => {
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -172,7 +173,7 @@ interface ConfirmOpts {
 }
 
 export function confirmDialog(o: ConfirmOpts): Promise<boolean> {
-  return mount<boolean>((done) => (
+  return mountDialog<boolean>((done) => (
     <Modal
       title={o.title}
       onClose={() => done(false)}
@@ -198,10 +199,11 @@ interface PromptOpts {
   hint?: ComponentChildren;
   validate?: (v: string) => string | null;
   upper?: boolean;
+  password?: boolean;
 }
 
 export function promptDialog(o: PromptOpts): Promise<string | null> {
-  return mount<string | null>((done) => <PromptBody o={o} done={done} />);
+  return mountDialog<string | null>((done) => <PromptBody o={o} done={done} />);
 }
 
 function PromptBody({ o, done }: { o: PromptOpts; done: (v: string | null) => void }) {
@@ -225,6 +227,7 @@ function PromptBody({ o, done }: { o: PromptOpts; done: (v: string | null) => vo
         <span>{o.label}</span>
         <input
           autoFocus
+          type={o.password ? 'password' : 'text'}
           value={v}
           class={o.upper ? 'upper' : ''}
           onInput={(e) => setV((e.target as HTMLInputElement).value)}

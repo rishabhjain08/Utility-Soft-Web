@@ -1,9 +1,11 @@
 // The packaged app, opened straight from disk as people will use it.
 import { test, expect } from '@playwright/test';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { FolderPicker } from './fs-shim';
-import { expectClients, gridRows, programCopy, waitSaved } from './helpers';
+import { expectClients, gridRows, migrateTo, programCopy, waitSaved } from './helpers';
 
 const APP = pathToFileURL(join(import.meta.dirname, '..', 'Utility Soft', 'Utility Soft.html')).href;
 
@@ -36,6 +38,8 @@ test('the packaged file works opened from disk', async ({ page }) => {
   await page.getByRole('button', { name: /Open Utility Soft folder/ }).click();
   await page.getByLabel('Password').fill('puja');
   await page.getByRole('button', { name: 'OK' }).click();
+  // Moving to the web format (password hashing needs a secure context too).
+  await migrateTo(page, picker, mkdtempSync(join(tmpdir(), 'usw-file-')));
   await expectClients(page, ['1|PREM|', '2|RISHABH|']);
   await page.getByRole('cell', { name: 'RISHABH' }).dblclick();
   await expect.poll(() => gridRows(page)).toEqual(['pooja|20']);

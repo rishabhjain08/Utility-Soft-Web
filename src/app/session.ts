@@ -1,26 +1,45 @@
-import { encodeCipherLines, encodePlainLines } from '../core/codec';
 import {
-  BillType, DEFAULT_BILL_TYPES, FILES, Letterhead, formatBillTypes, isRelativePath, letterheadFromImpinfo, pathParts,
-  readDataPath, readImpinfo, readPassword, writePassword,
+  BillType, FILES, Letterhead, isRelativePath, pathParts, readDataPath, readPassword, writePassword,
 } from '../core/config';
 import { FsDir, ensureDir, exists, findEntry, walk, writeFile } from '../core/fs';
 import { BILLS, LOCKS, Workspace } from '../core/workspace';
+import { WebBooks, isWebStore } from '../core/webstore';
 import { rememberedPath } from './folders';
 
+/** The bills: in the desktop (Java) layout or in the web format. */
+export type Books = Workspace | WebBooks;
+
 export interface Session {
+  /** The folder opened: the desktop program folder, or the web data folder. */
   program: FsDir;
-  data: FsDir;
-  ws: Workspace;
+  ws: Books;
   /** Where the data is, for display (Java's "Data Loaded From"). */
   dataLabel: string;
   types: BillType[];
   letterhead: Letterhead | null;
+  /** The password typed to open it (needed to export for the desktop version, which stores it). */
+  password: string;
 }
 
-export type FolderKind = 'program' | 'new' | 'not-program';
+/** Anything with a password: a desktop program folder or a web data folder. */
+export interface PasswordStore {
+  checkPassword(password: string): Promise<boolean>;
+  setPassword(password: string): Promise<void>;
+}
 
-/** Is this the Java program folder? */
+/** A folder that was opened, before the password is entered. */
+export type Place = { kind: 'desktop'; dir: FsDir } | { kind: 'web'; dir: FsDir };
+
+export function passwordStore(place: Place): PasswordStore {
+  if (place.kind === 'web') return new WebBooks(place.dir);
+  return { checkPassword: (p) => checkPassword(place.dir, p), setPassword: (p) => writePassword(place.dir, p) };
+}
+
+export type FolderKind = 'program' | 'web' | 'new' | 'not-program';
+
+/** Is this a web data folder, the Java program folder, an empty folder or something else? */
 export async function inspectProgram(dir: FsDir): Promise<{ kind: FolderKind; hasPassword: boolean }> {
+  if (await isWebStore(dir)) return { kind: 'web', hasPassword: true };
   const hasPassword = await exists(dir, FILES.pass, 'file');
   const hasImpinfo = await exists(dir, FILES.impinfo, 'file');
   if (hasPassword || hasImpinfo) return { kind: 'program', hasPassword };
@@ -29,22 +48,6 @@ export async function inspectProgram(dir: FsDir): Promise<{ kind: FolderKind; ha
   return { kind: 'not-program', hasPassword: false };
 }
 
-const DEFAULT_DROPDOWNS = [
-  'Audit^Fee for Tax Audit for the Assessment Year ##^Expenses',
-  'Vat^Fee for VAT Audit for the Assessment Year ##^Expenses',
-  'Tax^Fee for IT Return for the Assessment Year ##^Fee for filing of Form No. 15G & 15H^Fee for Service Tax Return for the Period ^Expenses',
-  'Others^Fee for Partnership Deed dated ^Fee for Retirement Deed dated ^Fee for Dissolution Deed dated ^Fee for Gift Deed dated ^Expenses',
-];
-
-/** Creates the files of a new Utility Soft installation in an empty folder. */
-export async function createProgram(dir: FsDir, password: string): Promise<void> {
-  await writePassword(dir, password);
-  if (!(await exists(dir, FILES.impinfo, 'file'))) await writeFile(dir, FILES.impinfo, encodeCipherLines([formatBillTypes(DEFAULT_BILL_TYPES)]));
-  if (!(await exists(dir, FILES.ddown, 'file'))) await writeFile(dir, FILES.ddown, encodePlainLines(DEFAULT_DROPDOWNS));
-  if (!(await exists(dir, FILES.loaddatafrom, 'file'))) await writeFile(dir, FILES.loaddatafrom, new Uint8Array());
-  if (!(await exists(dir, FILES.backupto, 'file'))) await writeFile(dir, FILES.backupto, new Uint8Array());
-  await prepareDataFolder(await ensureDir(dir, 'data'));
-}
 
 /** Makes sure a data folder has bills/ and activelocation.txt. */
 export async function prepareDataFolder(dir: FsDir): Promise<void> {
@@ -88,13 +91,29 @@ export async function looksLikeData(dir: FsDir): Promise<boolean> {
   return (await dir.list()).length === 0;
 }
 
-export async function openSession(program: FsDir, data: FsDir, label: string): Promise<Session> {
+export async function openSession(program: FsDir, data: FsDir, label: string, password: string): Promise<Session> {
   const ws = new Workspace(program, data);
   await ws.repairBillTypes();
-  return refreshSession({ program, data, ws, dataLabel: label, types: [], letterhead: null });
+  return refreshSession({ program, ws, dataLabel: label, types: [], letterhead: null, password });
+}
+
+export async function openWebSession(dir: FsDir, password: string): Promise<Session> {
+  return refreshSession({ program: dir, ws: new WebBooks(dir), dataLabel: dir.name, types: [], letterhead: null, password });
 }
 
 export async function refreshSession(s: Session): Promise<Session> {
-  const lines = await readImpinfo(s.program);
-  return { ...s, types: await s.ws.billTypes(), letterhead: letterheadFromImpinfo(lines) };
+  return { ...s, types: await s.ws.billTypes(), letterhead: await s.ws.letterhead() };
+}
+
+/**
+ * The data folder of a desktop installation, found without changing anything
+ * (for copying it). `data` is null when there is none yet; `path` alone means the
+ * folder (outside the program folder) must be selected first.
+ */
+export async function findDesktopData(program: FsDir): Promise<{ data: FsDir | null; label: string } | { path: string }> {
+  const path = await readDataPath(program);
+  if (path === '') return { data: await walk(program, ['data']), label: `${program.name}\\data` };
+  if (isRelativePath(path)) return { data: await walk(program, pathParts(path)), label: `${program.name}\\${pathParts(path).join('\\')}` };
+  const remembered = await rememberedPath('data', path, true);
+  return remembered ? { data: remembered, label: path } : { path };
 }

@@ -83,7 +83,7 @@ function parseBlock(line: string | undefined): string[] {
   return parts.map((p) => (p.startsWith('~') ? p.slice(1) : p));
 }
 
-function formatBlock(lines: string[]): string {
+export function formatBlock(lines: string[]): string {
   const clean = lines.map((l) => sanitize(l).replace(/%/g, ''));
   if (clean.length === 0) clean.push('');
   return clean.map((l) => `~${l}%`).join('');
@@ -98,7 +98,7 @@ function parseTitles(line: string | undefined): [string, string, string] {
   return out;
 }
 
-function formatTitles(t: string[]): string {
+export function formatTitles(t: string[]): string {
   const clean = [0, 1, 2].map((i) => sanitize(t[i] ?? '').replace(/%\$/g, '% $'));
   return `%$${clean[0]}%$${clean[1]}%$${clean[2]}%$`;
 }
@@ -121,11 +121,21 @@ export function needsLetterhead(lines: string[] | null): boolean {
   return !lines || lines.length < 2;
 }
 
+/** Lines 1-3 of impinfo.txt for a letterhead. */
+export function letterheadLines(lh: Letterhead): string[] {
+  return [formatBlock(lh.firmName), formatBlock(lh.firmAddress), formatTitles(lh.indexTitles)];
+}
+
+/** The letterhead as it reads back after being stored (characters impinfo.txt cannot hold are removed). */
+export function cleanLetterhead(lh: Letterhead): Letterhead {
+  return letterheadFromImpinfo(['', ...letterheadLines(lh)])!;
+}
+
 export async function writeLetterhead(program: FsDir, lh: Letterhead): Promise<void> {
   const lines = (await readImpinfo(program)) ?? [];
   const typesLine = lines[0] ?? formatBillTypes(DEFAULT_BILL_TYPES);
   const rest = lines.slice(4);
-  await writeImpinfo(program, [typesLine, formatBlock(lh.firmName), formatBlock(lh.firmAddress), formatTitles(lh.indexTitles), ...rest]);
+  await writeImpinfo(program, [typesLine, ...letterheadLines(lh), ...rest]);
 }
 
 export async function writeBillTypes(program: FsDir, types: BillType[]): Promise<void> {
@@ -150,9 +160,20 @@ export function dropdownItems(lines: string[], tab: string): string[] {
   return [];
 }
 
+export const DEFAULT_DROPDOWNS = [
+  'Audit^Fee for Tax Audit for the Assessment Year ##^Expenses',
+  'Vat^Fee for VAT Audit for the Assessment Year ##^Expenses',
+  'Tax^Fee for IT Return for the Assessment Year ##^Fee for filing of Form No. 15G & 15H^Fee for Service Tax Return for the Period ^Expenses',
+  'Others^Fee for Partnership Deed dated ^Fee for Retirement Deed dated ^Fee for Dissolution Deed dated ^Fee for Gift Deed dated ^Expenses',
+];
+
 /** Replaces the lists for the given tabs, keeping lines for other tabs untouched. */
 export async function writeDropdowns(program: FsDir, types: BillType[], lists: Map<string, string[]>): Promise<void> {
-  const old = await readDropdownLines(program);
+  await writeFile(program, FILES.ddown, encodePlainLines(mergeDropdowns(await readDropdownLines(program), types, lists)));
+}
+
+/** ddown.txt lines with the lists for `types` replaced (other lines are kept). */
+export function mergeDropdowns(old: string[], types: BillType[], lists: Map<string, string[]>): string[] {
   const out: string[] = [];
   for (const t of types) {
     const items = (lists.get(t.tab) ?? dropdownItems(old, t.tab))
@@ -164,7 +185,7 @@ export async function writeDropdowns(program: FsDir, types: BillType[], lists: M
     const key = line.includes('^') ? line.slice(0, line.indexOf('^')) : line;
     if (!types.some((t) => sameName(t.tab, key)) && line.trim() !== '') out.push(line);
   }
-  await writeFile(program, FILES.ddown, encodePlainLines(out));
+  return out;
 }
 
 // ---------- backupto.txt (shifted) ----------

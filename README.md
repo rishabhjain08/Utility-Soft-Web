@@ -1,8 +1,10 @@
 # Utility Soft (web)
 
 The billing program **Utility Soft**, rebuilt as a web app for Google Chrome (or Microsoft
-Edge). It works directly on the same folder and files as the original Java program, so both
-versions can be used side by side on the same data, even at the same time on different computers.
+Edge). It keeps its data in its own folder of plain files ([the format](docs/data-format.md)).
+Your existing desktop (Java) data is moved there once, by making a checked copy; the desktop
+folder is not changed. Everything can be exported back for the desktop version at any time.
+The web app can also still work directly on the desktop files, side by side with the Java program.
 
 ## Install
 
@@ -16,29 +18,46 @@ folder again.
 
 The first time, click **Open Utility Soft folder…** and choose the Java program folder (the
 one with `billing.jar`, `pass.txt` and `impinfo.txt`), allow Chrome to edit files, then enter the
-password. After that the app offers **Continue with “…”** and only asks for the password.
+password. The app then offers to **move to the new format**:
+
+- **Make a copy in the new format…** copies everything into a new folder you choose (an empty
+  one, or a new *Utility Soft Data* folder inside it) and checks every bill, client and setting
+  against the desktop folder, which is only read, never changed. The report lists what was
+  checked. From then on, use the web app on the copy; bills entered in the desktop version
+  afterwards are not in it (Utility ▸ *Compare with a desktop folder* lists them).
+- **Keep using the desktop files** works on them directly, as before (and Utility ▸ *Move to the
+  new format* is there for later).
+
+After that the app offers **Continue with “…”** and only asks for the password.
 
 Starting from nothing? Click **Start a new Utility Soft…** and choose where to keep the files
 (Documents, D:\, …). If that folder is empty it is used as it is; otherwise the app creates a new
 folder inside it (named *Utility Soft Files* unless you type another name). Then choose a password
-and fill in your letterhead. To also use the desktop (Java) version later, copy `billing.jar` into
-that folder.
+and fill in your letterhead. To use the desktop (Java) version on it later, use Utility ▸ *Export
+for the desktop version*.
 
 ## Password and stored files
 
-- Nothing is shown before the password is entered. It is the same password as the Java
-  version, kept in `pass.txt`, and it can be changed on the password screen
-  (*Change password*) or under Utility.
+- Nothing is shown before the password is entered. A copy keeps the desktop version's password.
+  It can be changed on the password screen (*Change password*) or under Utility.
+- In the web format the password is stored only as a hash (PBKDF2); bills and settings are plain
+  JSON, readable with any text editor. See [the format](docs/data-format.md).
+
+On the desktop files:
+
+- The password is the Java version's, kept in `pass.txt`.
 - Like the Java version, files are stored scrambled with its simple character-shift scheme:
   the password, letterhead and bill types (`impinfo.txt`), backup folder (`backupto.txt`),
   every bill, S.No. and Bill No. This keeps casual readers out; it is not strong encryption.
 - As in the Java version, these are plain text: folder names (years, client names, bill and tab
   names), the drop-down lists (`ddown.txt`), the data location (`loaddatafrom.txt`) and the list
   of clients open right now (`activelocation.txt`).
-- The browser itself stores only which folders you chose and one preference (whether to ask
-  for a backup on exit). It stores no bills or passwords.
+- The browser itself stores only which folders you chose (and which desktop folders were copied
+  where) and one preference (whether to ask for a backup on exit). It stores no bills or passwords.
 
 ### Where the data is
+
+In the web format, all data is in the one folder you opened. On the desktop files:
 
 - Data is read from `<program folder>\data` unless `loaddatafrom.txt` names another folder
   (Utility ▸ *Data location*). Browsers cannot see full folder paths. So when the data
@@ -64,7 +83,10 @@ that folder.
 | “Update bill to next year?” on Done | Same question |
 | “File is already open on a computer” (`activelocation.txt`) | Same lock file; can *Open anyway* if a lock was left behind |
 | Utility: Copy Data, Add Next Year, Print the Bills, Print the Menu, BackUp Data, Auto BackUp to, Load Data, Add New Tab, Edit Drop Down List, Exit | Utility dialog with the same items (“Print the Menu” is *Print the index sheet*) |
-| Auto-backup question on exit (`dd.MM.yyyy+h.m.sAM` folders) | Same, same folder names |
+| Auto-backup question on exit (`dd.MM.yyyy+h.m.sAM` folders) | Same, same folder names; a web-format backup opens like the original |
+| — | Utility ▸ *Move to the new format*: a checked copy in the web format (the desktop folder is not changed) |
+| — | Utility ▸ *Export for the desktop version*: a checked copy in the desktop layout, ready for `billing.jar` |
+| — | Utility ▸ *Compare with a desktop folder*: every difference between desktop data and the web data |
 | Print preview and printing (each bill twice per page) | Chrome's own print dialog, with its preview, printer choice and *Save as PDF* |
 | List refreshes when another computer changes it | Same, both ways (web ↔ Java) |
 
@@ -91,7 +113,10 @@ Browsers reserve some of the Java program's shortcuts (Ctrl+N, Ctrl+Q, Ctrl+1…
 
 ## Compatibility
 
-All files keep the Java program's format: the shifted-character encoding of `pass.txt`,
+The web format is described in [docs/data-format.md](docs/data-format.md): how it is moved from
+the desktop layout, checked, and exported back.
+
+On the desktop files (and in an export), all files keep the Java program's format: the shifted-character encoding of `pass.txt`,
 `impinfo.txt`, `backupto.txt`, `serialno.txt`, `billfromto.txt` and bill files; plain-text
 `ddown.txt`, `loaddatafrom.txt` and `activelocation.txt`; CRLF line endings; `##` for the
 year in bill rows; and the same folder layout `data/bills/<YY-YY>/<CLIENT>/<Type>/<BILL>.txt`.
@@ -99,8 +124,9 @@ S.No. renumbering, late entries and copying bills from the last three years foll
 rules.
 
 The `compat/` folder drives the original Java program to check this in both directions:
-data written by the web app is opened, listed, edited and printed by Java, and data written
-through the Java program's own windows is opened and printed by the web app.
+data written by the web app (on the desktop files, and in the web format then exported) is
+opened, listed, edited and printed by Java, and data written through the Java program's own
+windows is opened and printed by the web app, directly and after moving it to the web format.
 
 ### Bugs of the Java program that are fixed (not copied)
 
@@ -126,6 +152,8 @@ through the Java program's own windows is opened and printed by the web app.
 - A wrong password was ignored silently.
 - *Modify* with *Late entry* still moved every client after the old place down by one. Keeping
   the other numbers now keeps all of them; a client renamed without moving keeps its own S.No.
+- Renaming a client cut it off from its earlier years (no amounts alongside, new bills starting
+  empty). In the web format a client keeps its earlier years through renames.
 
 ### Protecting the Java program from a crash in its own code
 
@@ -159,13 +187,16 @@ npx playwright test  # end-to-end customer journeys in Chrome
 ```
 
 End-to-end tests replace Chrome's folder picker with folders on disk (`e2e/fs-shim.ts`), so
-the Java checks can open the results. One test uses Chrome's real folder handles.
+the Java checks can open the results. The client, bill and Utility journeys run in both formats.
+Two tests use Chrome's real folder handles (on the desktop files, and moving to the web format).
 
 Java compatibility checks (Linux, needs `Xvfb`, a JDK 8 and the Java sources checked out next to
 this repo as `../Utility-Soft`):
 
 ```
 compat/build-java.sh
-npx playwright test e2e/compat-build.spec.ts e2e/compat-repair.spec.ts && python3 compat/check_web_to_java.py
+npx playwright test e2e/compat-build.spec.ts e2e/compat-repair.spec.ts
+python3 compat/check_web_to_java.py                                             # on the desktop files
+python3 compat/check_web_to_java.py .tmp/compat-export .tmp/compat-repair-export # web format, exported
 python3 compat/build_java_data.py && npx playwright test e2e/compat-read.spec.ts
 ```

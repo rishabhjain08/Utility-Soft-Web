@@ -86,3 +86,30 @@ export async function loadPrefs(): Promise<Prefs> {
 export async function savePrefs(p: Prefs): Promise<void> {
   await kvSet('prefs', p);
 }
+
+// Desktop folders already copied to the web format (so opening one again can say so).
+interface Migration {
+  from: FileSystemDirectoryHandle;
+  to: FileSystemDirectoryHandle;
+  at: string;
+}
+
+export async function rememberMigration(from: FsDir, to: FsDir): Promise<void> {
+  if (!(from instanceof FsaDir) || !(to instanceof FsaDir)) return;
+  const list = (await kvGet<Migration[]>('migrations')) ?? [];
+  await kvSet('migrations', [...list, { from: from.handle, to: to.handle, at: new Date().toISOString() }]);
+}
+
+/** The most recent web copy made of this desktop folder, if any. */
+export async function migrationOf(dir: FsDir): Promise<{ to: FsaDir; at: Date } | null> {
+  if (!(dir instanceof FsaDir)) return null;
+  const list = (await kvGet<Migration[]>('migrations')) ?? [];
+  for (const m of [...list].reverse()) {
+    try {
+      if (await m.from.isSameEntry(dir.handle)) return { to: new FsaDir(m.to), at: new Date(m.at) };
+    } catch {
+      // A folder that no longer exists.
+    }
+  }
+  return null;
+}

@@ -128,9 +128,7 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
     let live = true;
     attempt(async () => {
       const r = await s.ws.readBill(year, info.name, type.folder, bill);
-      const h = await Promise.all(
-        previousYears(year, 3).map(async (y) => ({ year: y, lines: await s.ws.readBillLines(y, info.name, type.folder, bill) })),
-      );
+      const h = await s.ws.historyLines(year, info.name, type.folder, bill);
       if (!live) return;
       setRows(r);
       setLoadedKey(keyOf(year, type, bill));

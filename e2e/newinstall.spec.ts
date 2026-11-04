@@ -2,7 +2,9 @@ import { test, expect } from '@playwright/test';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { cipherLines, cipherValue, expectClients, gridRows, printed, programCopy, start, waitSaved } from './helpers';
+import { cipherLines, cipherValue, expectClients, exportTo, gridRows, printed, programCopy, start, waitSaved } from './helpers';
+
+const json = (p: string) => JSON.parse(readFileSync(p, 'utf8'));
 
 test('a new installation in an empty folder, from first year to printed bill', async ({ page }) => {
   const picker = await start(page);
@@ -59,21 +61,39 @@ test('a new installation in an empty folder, from first year to printed bill', a
   await expect(printed(page).locator('.bill-copy').first().locator('.bc-words')).toHaveText('(Rs. Twenty Six Thousand Five Hundred only.)');
   await expect(printed(page).locator('.bill-copy').first().locator('.bc-firm')).toContainText('For R. K. & Co.');
 
-  // Files exactly as the Java program lays them out.
-  expect(readdirSync(dir).sort()).toEqual(['backupto.txt', 'data', 'ddown.txt', 'impinfo.txt', 'loaddatafrom.txt', 'pass.txt']);
-  expect(cipherValue(join(dir, 'pass.txt'))).toBe('abc');
-  expect(cipherLines(join(dir, 'impinfo.txt'))).toEqual([
+  // Kept in the web format: one settings file and one file per client and year.
+  expect(readdirSync(dir).sort()).toEqual(['open', 'utility-soft.json', 'years']);
+  const settings = json(join(dir, 'utility-soft.json'));
+  expect(settings.letterhead).toEqual({ firmName: ['For R. K. & Co.', '', 'Partner'], firmAddress: ['MG Road, Jaipur'], indexTitles: ['', '', ''] });
+  expect(JSON.stringify(settings)).not.toContain('"abc"');
+  const [file] = readdirSync(join(dir, 'years/26-27'));
+  expect(json(join(dir, 'years/26-27', file))).toMatchObject({
+    name: 'SHARMA TRADERS',
+    serial: '1',
+    billNo: '',
+    bills: [{ type: 'Audit', name: 'RAMESH SHARMA', groups: [{ rows: [{ text: 'Fee for Tax Audit for the Assessment Year ##', amount: '25000' }, { text: 'Expenses', amount: '1500' }] }] }],
+  });
+  expect(readdirSync(join(dir, 'open'))).toEqual(['26-27 SHARMA TRADERS.lock']);
+
+  // Exported for the desktop version: files exactly as the Java program lays them out.
+  await page.getByRole('button', { name: '← Done' }).click();
+  const out = mkdtempSync(join(tmpdir(), 'usw-export-'));
+  await exportTo(page, picker, out);
+  expect(readdirSync(out).sort()).toEqual(['backupto.txt', 'data', 'ddown.txt', 'impinfo.txt', 'loaddatafrom.txt', 'pass.txt']);
+  expect(cipherValue(join(out, 'pass.txt'))).toBe('abc');
+  expect(cipherLines(join(out, 'impinfo.txt'))).toEqual([
     '(Audit^Audit)(Vat^Vat)(Tax^Tax)(Others^Others)',
     '~For R. K. & Co.%~%~Partner%',
     '~MG Road, Jaipur%',
     '%$%$%$%$',
   ]);
-  expect(readdirSync(join(dir, 'data/bills/26-27/SHARMA TRADERS')).sort()).toEqual(['Audit', 'Others', 'Tax', 'Vat', 'billfromto.txt', 'serialno.txt']);
-  expect(cipherLines(join(dir, 'data/bills/26-27/SHARMA TRADERS/Audit/RAMESH SHARMA.txt'))).toEqual([
+  expect(readdirSync(join(out, 'data/bills/26-27/SHARMA TRADERS')).sort()).toEqual(['Audit', 'Others', 'Tax', 'Vat', 'billfromto.txt', 'serialno.txt']);
+  expect(cipherLines(join(out, 'data/bills/26-27/SHARMA TRADERS/Audit/RAMESH SHARMA.txt'))).toEqual([
     'Fee for Tax Audit for the Assessment Year ##,25000',
     'Expenses,1500',
   ]);
-  expect(readFileSync(join(dir, 'data/activelocation.txt'), 'latin1')).toBe('26-27,SHARMA TRADERS\r\n');
+  expect(readFileSync(join(out, 'data/activelocation.txt'), 'latin1')).toBe('');
+  expect(readdirSync(join(dir, 'open'))).toEqual([]);
 });
 
 test('starting a new Utility Soft creates its own folder inside a busy one', async ({ page }) => {
@@ -100,8 +120,8 @@ test('starting a new Utility Soft creates its own folder inside a busy one', asy
   await expect(page.getByRole('button', { name: 'Add the first year…' })).toBeVisible();
 
   expect(readdirSync(place).sort()).toEqual(['Billing', 'Utility Soft Files', 'notes.txt']);
-  expect(readdirSync(join(place, 'Billing')).sort()).toEqual(['backupto.txt', 'data', 'ddown.txt', 'impinfo.txt', 'loaddatafrom.txt', 'pass.txt']);
-  expect(cipherValue(join(place, 'Billing', 'pass.txt'))).toBe('abc');
+  expect(readdirSync(join(place, 'Billing')).sort()).toEqual(['utility-soft.json', 'years']);
+  expect(json(join(place, 'Billing', 'utility-soft.json')).password.kdf).toBe('PBKDF2-SHA256');
 });
 
 test('starting a new Utility Soft in an existing one offers to open it', async ({ page }) => {

@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
 import { Client, checkName, UserError } from '../core/workspace';
-import { writeDropdowns } from '../core/config';
 import { sameName } from '../core/sort';
 import { InsertPlan, planInsert, planRename, samePlan } from '../core/serial';
 import { Session } from './session';
@@ -349,7 +348,7 @@ export function DropdownDialog({ s, onClose, onSaved }: { s: Session; onClose: (
   const set = (next: string[]) => setLists(new Map(lists!).set(tab, next));
   const save = () =>
     attempt(async () => {
-      await writeDropdowns(s.program, s.types, lists!);
+      await s.ws.saveDropdowns(s.types, lists!);
       toast('Drop-down lists saved.', 'ok');
       (onSaved ?? onClose)();
     });

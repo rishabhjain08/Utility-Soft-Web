@@ -12,6 +12,9 @@ test('tour', async ({ page }) => {
   await shot('02-login');
   await page.getByLabel('Password').fill('puja');
   await page.getByRole('button', { name: 'OK' }).click();
+  await page.getByRole('heading', { name: 'Move to the new format' }).waitFor();
+  await shot('02b-move');
+  await page.getByRole('button', { name: 'Keep using the desktop files' }).click();
   await page.locator('table.clients').waitFor();
   await selectClient(page, 'PREM');
   await shot('03-main');
