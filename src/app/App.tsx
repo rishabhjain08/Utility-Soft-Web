@@ -12,7 +12,9 @@ import { Main } from './main';
 import { Editor, confirmNextYearCopy } from './editor';
 import { autoBackup } from './utility';
 import { loadPrefs } from './folders';
-import { BusyOverlay, Toasts, attempt, confirmDialog, setErrorLog, toast } from './ui';
+import { BusyOverlay, Toasts, attempt, busy, confirmDialog, setErrorLog, toast } from './ui';
+import { backupToDrive, driveDue } from '../core/backup';
+import { driveState, googleDrive } from './google';
 
 /** Locks the data after this long without use (the computer is shared). */
 const IDLE_LOCK = 15 * 60_000;
@@ -175,6 +177,10 @@ export function App() {
   const exit = (s: Session) =>
     attempt(async () => {
       const prefs = await loadPrefs();
+      if ((await driveState()).ok && driveDue((await s.ws.settings()).drive)) {
+        const yes = await confirmDialog({ title: 'Exit', message: <p>Today's backup to Google Drive is not made yet. Make it before closing?</p>, ok: 'Back up to Drive', cancel: 'Not now' });
+        if (yes && !(await busy('Backing up to Google Drive…', async () => (await backupToDrive(s.ws, googleDrive()), true)))) return;
+      }
       if (prefs.askBackupOnExit && (await s.ws.backupPath())) {
         const yes = await confirmDialog({ title: 'Exit', message: <p>Back up the data before closing?</p>, ok: 'Yes', cancel: 'No' });
         if (yes && !(await autoBackup(s))) {

@@ -98,6 +98,8 @@ export interface Settings {
     files: ExtraFile[];
   };
   migratedFrom?: { at: string; folder: string; data: string };
+  /** Backups to Google Drive: once a day when `daily`; `last` is when the last one was made (ms). */
+  drive?: { daily: boolean; last?: number };
 }
 
 /**
@@ -355,6 +357,7 @@ function parseSettings(v: unknown): Settings {
     autoBackup: s.autoBackup ?? '',
     desktop: { impinfoExtra: s.desktop?.impinfoExtra ?? [], extras: s.desktop?.extras ?? [], files: s.desktop?.files ?? [] },
     ...(s.migratedFrom ? { migratedFrom: s.migratedFrom } : {}),
+    ...(s.drive ? { drive: s.drive } : {}),
   };
 }
 
@@ -753,6 +756,23 @@ export class WebBooks {
     await this.updateSettings((s) => {
       s.autoBackup = sanitize(path);
     });
+  }
+
+  async setDriveDaily(daily: boolean): Promise<void> {
+    await this.updateSettings((s) => {
+      s.drive = { ...s.drive, daily };
+    });
+  }
+
+  async noteDriveBackup(at: number): Promise<void> {
+    await this.updateSettings((s) => {
+      s.drive = { daily: s.drive?.daily ?? false, last: at };
+    });
+  }
+
+  /** An id for this data in Google Drive that says nothing about it (the same on every computer). */
+  async storeId(): Promise<string> {
+    return this.vault.key.name('google drive store');
   }
 
   async addBillType(rawName: string): Promise<void> {
@@ -1427,7 +1447,7 @@ export class WebBooks {
 /** Methods that change the data (serialized per WebBooks; none calls another). */
 const CHANGES = [
   'setPassword', 'setRecoveryCode', 'saveLetterhead', 'saveDropdowns', 'setBackupPath', 'addBillType', 'renameBillType', 'setBillTypeOrder',
-  'setBillTypeHidden', 'setBillNo', 'addClient', 'deleteClients', 'modifyClient', 'writeBill', 'createBill', 'renameBill',
+  'setBillTypeHidden', 'setDriveDaily', 'noteDriveBackup', 'setBillNo', 'addClient', 'deleteClients', 'modifyClient', 'writeBill', 'createBill', 'renameBill',
   'deleteBill', 'addPayment', 'removePayment', 'markPrinted', 'saveClientDetails', 'copyClients', 'copyClientToNextYear', 'restore',
   'restoreDamaged', 'replaceData',
 ] as const satisfies readonly (keyof WebBooks)[];

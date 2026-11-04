@@ -11,6 +11,8 @@ import { FsDir, readOnly, tryDir, tryRead, writeFile } from './fs';
 import { UserError } from './names';
 import { BACKUPS, MANIFEST, WebBooks } from './webstore';
 import { Vault } from './vault';
+import { Drive, DriveBackup } from './drive';
+import { MemDir, pack, unpack } from './pack';
 
 export const BACKUP_INFO = 'backup.json';
 
@@ -204,5 +206,35 @@ export async function restoreBackup(web: WebBooks, dir: FsDir, now = Date.now())
   const years = await backup.years();
   // (Everything is read before this: keeping only one backup a day may remove the one being restored.)
   await backupInside(web, now);
-  await web.replaceData(files, years, (restored, current) => ({ ...restored, autoBackup: current.autoBackup }));
+  await web.replaceData(files, years, (restored, current) => ({ ...restored, autoBackup: current.autoBackup, ...(current.drive ? { drive: current.drive } : {}) }));
+}
+
+// ---------- Google Drive ----------
+
+/** A backup made now and sent to Drive (then older ones there thinned out like the daily ones). */
+export async function backupToDrive(web: WebBooks, drive: Drive, now = Date.now()): Promise<void> {
+  const mem = new MemDir('backup');
+  await makeBackup(web, mem, { now });
+  const data = await pack(mem);
+  const store = await web.storeId();
+  const label = web.root.name;
+  await drive.upload(`Utility Soft backup - ${label} - ${stampName(now)}.usbackup`, data, { at: now, store, label });
+  const all = await drive.list(store);
+  const keep = backupsToKeep(all.map((b) => b.at));
+  for (const b of all) if (!keep.has(b.at)) await drive.remove(b.id);
+  await web.noteDriveBackup(now);
+}
+
+/** A Drive backup, downloaded and checked, as a folder in memory. */
+export async function fromDrive(drive: Drive, b: DriveBackup): Promise<MemDir> {
+  const mem = unpack(await drive.download(b.id));
+  if (!mem || !(await isBackup(mem))) throw new UserError('This file in Google Drive is not a Utility Soft backup.');
+  const broken = await checkBackup(mem);
+  if (broken.length) throw new UserError(`This backup in Google Drive is damaged (${broken.length} file${broken.length === 1 ? '' : 's'}). Choose another one.`);
+  return mem;
+}
+
+/** Whether today's Drive backup is due. */
+export function driveDue(drive: { daily: boolean; last?: number } | undefined, now = Date.now()): boolean {
+  return !!drive?.daily && (!drive.last || new Date(drive.last).toDateString() !== new Date(now).toDateString());
 }

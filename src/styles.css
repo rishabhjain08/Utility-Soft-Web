@@ -1730,3 +1730,16 @@ kbd {
     grid-template-columns: 1fr;
   }
 }
+.drive-due {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 16px;
+  background: var(--ledger-soft);
+  border-bottom: 1px solid var(--rule);
+}
+section.drive {
+  margin-top: 18px;
+  padding-top: 8px;
+  border-top: 1px solid var(--rule);
+}

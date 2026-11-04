@@ -8,6 +8,8 @@ import { printBills, printIndex } from './printing';
 import { groupIndian } from '../core/money';
 import { billNoClashes } from '../core/billno';
 import { KeysDialog, OpenAt, SearchDialog } from './search';
+import { backupToDrive, driveDue } from '../core/backup';
+import { driveState, googleDrive } from './google';
 import { attempt, busy, confirmDialog, promptDialog, toast } from './ui';
 
 type Dialog =
@@ -43,6 +45,20 @@ export function Main({ s, year, setYear, onOpen, onOpenAt, onPayments, onExit, o
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
   const [problems, setProblems] = useState<Problem[]>([]);
+  // Today's Google Drive backup, when it is due (one click: the Google window needs a click to open).
+  const [driveDueNow, setDriveDueNow] = useState(false);
+  useEffect(() => {
+    (async () => {
+      const st = await driveState();
+      setDriveDueNow(st.ok && driveDue((await s.ws.settings()).drive));
+    })().catch(() => undefined);
+  }, [s]);
+  const driveNow = () =>
+    busy('Backing up to Google Drive…', async () => {
+      await backupToDrive(s.ws, googleDrive());
+      setDriveDueNow(false);
+      toast('Backed up to Google Drive.', 'ok');
+    });
   const tableRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<Dialog>(null);
@@ -318,6 +334,17 @@ export function Main({ s, year, setYear, onOpen, onOpenAt, onPayments, onExit, o
         </button>
       </header>
 
+      {driveDueNow && (
+        <div class="drive-due" role="status">
+          <span>Today's backup to Google Drive is due.</span>
+          <button class="primary small" onClick={driveNow}>
+            Back up now
+          </button>
+          <button class="small" onClick={() => setDriveDueNow(false)}>
+            Not now
+          </button>
+        </div>
+      )}
       {problems.length > 0 && (
         <div class="problems" role="alert">
           {problems.map((p) => (

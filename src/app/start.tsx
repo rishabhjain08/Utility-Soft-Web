@@ -7,7 +7,11 @@ import { financialYearOf } from '../core/years';
 import { WebBooks, createStore } from '../core/webstore';
 import { ensurePermission, pickFolder, rememberProgram, rememberedProgram, supportsFolders } from './folders';
 import { checkDesktopPassword, inspectProgram, thisComputer, unlock } from './session';
-import { attempt, busy, confirmDialog, toast } from './ui';
+import { Modal, attempt, busy, confirmDialog, mountDialog, toast } from './ui';
+import { DriveState, driveState, googleDrive } from './google';
+import { fromDrive } from '../core/backup';
+import { DriveBackup } from '../core/drive';
+import { writeOut } from '../core/pack';
 import { chooseNewFolder } from './migrate';
 import { LetterheadPart, LetterheadPreview, SAMPLE } from './letterhead-preview';
 
@@ -91,6 +95,45 @@ export function Welcome({ onOpened }: { onOpened: (dir: FsDir, kind: OpenedKind,
       onOpened(dir, 'new', false);
     });
 
+  // A lost or new computer: a backup from Google Drive, written into a new folder.
+  const [drive, setDrive] = useState<DriveState | null>(null);
+  useEffect(() => {
+    driveState().then(setDrive, () => undefined);
+  }, []);
+  const restoreDrive = () =>
+    attempt(async () => {
+      setMessage(null);
+      const list = await busy('Looking in Google Drive…', () => googleDrive().list());
+      if (!list) return;
+      if (list.length === 0) return setMessage('There are no Utility Soft backups in this Google account’s Drive.');
+      const b = await mountDialog<DriveBackup | null>((done) => (
+        <Modal title="Restore from Google Drive" wide onClose={() => done(null)} footer={<button onClick={() => done(null)}>Cancel</button>}>
+          <p class="hint">Backups of Utility Soft data in your Google Drive, newest first. The restored data opens with the password it had then, or the recovery code.</p>
+          <ul class="backup-list">
+            {list.map((x) => (
+              <li key={x.id}>
+                <span>
+                  <b>{x.label || 'Utility Soft data'}</b> · {new Date(x.at).toLocaleString([], { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                </span>
+                <button onClick={() => done(x)}>Restore this…</button>
+              </li>
+            ))}
+          </ul>
+        </Modal>
+      ));
+      if (!b) return;
+      const mem = await busy('Downloading from Google Drive…', () => fromDrive(googleDrive(), b));
+      if (!mem) return;
+      const dir = await chooseNewFolder({ id: 'utility-soft-restore', title: 'Where should the restored data go?', suggestion: b.label || 'Utility Soft Data' });
+      if (!dir) return;
+      if ((await dir.list()).length) return setMessage(`${dir.name} is not empty.`);
+      const ok = await busy('Restoring…', async () => (await writeOut(mem, dir), true));
+      if (!ok) return;
+      await rememberProgram(dir);
+      toast(`Restored into ${dir.name}.`, 'ok');
+      onOpened(dir, 'web', true);
+    });
+
   const reopen = () =>
     attempt(async () => {
       if (!remembered) return;
@@ -131,6 +174,11 @@ export function Welcome({ onOpened }: { onOpened: (dir: FsDir, kind: OpenedKind,
         <button class="big" onClick={startNew}>
           Start a new Utility Soft…
         </button>
+        {drive?.ok && (
+          <button class="big" onClick={restoreDrive}>
+            Restore from Google Drive…
+          </button>
+        )}
         <p class="hint">
           To use your existing bills, open the folder with your Utility Soft data, or the desktop program folder (the one with{' '}
           <code>billing.jar</code>, <code>pass.txt</code> and <code>impinfo.txt</code>). To start from nothing, choose where to keep the new

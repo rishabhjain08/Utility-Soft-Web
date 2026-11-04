@@ -66,6 +66,11 @@ After that the app offers **Continue with “…”** and only asks for the pass
   compared with the data now, and restored. A restore backs up the current data first, so it
   can be undone. *Back up now* copies to a folder of your choice (a USB stick); the backup on
   exit goes to a chosen folder, as in the desktop version.
+- **Backups in Google Drive:** in Utility ▸ *Backups*, a copy of each backup can go to your Google
+  Drive, encrypted, once a day with one click. Restore from there, or from the start screen
+  on a new or lost computer. It works when Utility Soft is opened from its web address,
+  https://rishabhjain08.github.io/Utility-Soft-Web/; setting it up once is described in
+  [docs/google-drive-setup.md](docs/google-drive-setup.md).
 - **Deleted clients and bills** stay in a bin for 30 days (Utility ▸ *Deleted clients and
   bills*). This includes clients replaced by *Copy clients to another year*.
 - **Undo and redo** in the bill editor (Ctrl+Z, Ctrl+Y), and **earlier versions of a bill**
@@ -217,6 +222,7 @@ Java runtimes cannot read.
 npm install
 npm run dev          # development server
 npm run build        # builds and updates "Utility Soft/Utility Soft.html" (commit it)
+npm run publish-pages  # publishes the build to the web address (gh-pages branch)
 npm test             # unit tests (Node, real folders), including 40 generated round trips
 SCALE=1 npx vitest run tests/scale.test.ts   # timings with 2,000 clients over 10 years
 npx playwright test  # end-to-end customer journeys in Chrome

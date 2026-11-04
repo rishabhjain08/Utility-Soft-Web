@@ -2,7 +2,9 @@ import { useEffect, useState } from 'preact/hooks';
 import { FsDir } from '../core/fs';
 import { BinEntry, Client, WebBooks } from '../core/webstore';
 import { backupFolderName } from '../core/util';
-import { BackupEntry, checkBackup, insideBackups, isBackup, listBackups, makeBackup, openBackup, pruneBackups, restoreBackup } from '../core/backup';
+import { BackupEntry, backupToDrive, checkBackup, fromDrive, insideBackups, isBackup, listBackups, makeBackup, openBackup, pruneBackups, restoreBackup } from '../core/backup';
+import { DriveBackup } from '../core/drive';
+import { APP_URL, DriveState, driveProblem, driveState, googleDrive } from './google';
 import { compare, webSide } from '../core/verify';
 import { Session, nameThisComputer, refreshSession, thisComputer } from './session';
 import { ReportView, compareFlow, exportFlow } from './migrate';
@@ -379,7 +381,103 @@ function BackupDialog({ s, onClose, onRestored }: { s: Session; onClose: () => v
           <button onClick={restoreFrom}>Restore from a backup folder…</button>
         </section>
       </div>
+      <DriveSection s={s} onRestored={() => (onRestored(), onClose())} />
     </Modal>
+  );
+}
+
+/** Backups in Google Drive: switched on for every day, made now, listed, compared and restored. */
+function DriveSection({ s, onRestored }: { s: Session; onRestored: () => void }) {
+  const [state, setState] = useState<DriveState | null>(null);
+  const [settings, setSettings] = useState<{ daily: boolean; last?: number } | undefined>(undefined);
+  const [list, setList] = useState<DriveBackup[] | null>(null);
+  const load = () =>
+    attempt(async () => {
+      setState(await driveState());
+      setSettings((await s.ws.settings()).drive);
+    });
+  useEffect(() => {
+    load();
+  }, []);
+  const now = () =>
+    busy('Backing up to Google Drive…', async () => {
+      await backupToDrive(s.ws, googleDrive());
+      toast('Backed up to Google Drive.', 'ok');
+      await load();
+      if (list) setList(await googleDrive().list(await s.ws.storeId()));
+    });
+  const show = () =>
+    busy('Looking in Google Drive…', async () => {
+      setList(await googleDrive().list(await s.ws.storeId()));
+    });
+  const daily = (on: boolean) =>
+    attempt(async () => {
+      await s.ws.setDriveDaily(on);
+      await load();
+    });
+  return (
+    <section class="drive">
+      <h3>Google Drive</h3>
+      {state === null ? (
+        <p>Loading…</p>
+      ) : !state.ok ? (
+        <p class="hint">
+          {driveProblem(state)}
+          {state.reason === 'file' && (
+            <>
+              {' '}
+              <a href={APP_URL} target="_blank" rel="noreferrer">
+                Open it there
+              </a>
+            </>
+          )}
+        </p>
+      ) : (
+        <>
+          <p class="hint">
+            A copy of each backup is kept in your Google Drive (folder “Utility Soft backups”), encrypted, so it is safe even if this computer is lost. It opens with
+            the password or the recovery code.
+          </p>
+          <div class="row left">
+            <button class="primary" onClick={now}>
+              Back up to Google Drive now
+            </button>
+            <label class="check">
+              <input type="checkbox" checked={!!settings?.daily} onChange={(e) => daily((e.target as HTMLInputElement).checked)} />
+              <span>Every day (asked once a day, with one click)</span>
+            </label>
+            <span class="hint">{settings?.last ? `Last: ${when(settings.last)}` : 'Not backed up to Drive yet.'}</span>
+          </div>
+          {list === null ? (
+            <button class="link" onClick={show}>
+              Show the backups in Google Drive
+            </button>
+          ) : list.length === 0 ? (
+            <p class="hint">No backups of this data in Google Drive yet.</p>
+          ) : (
+            <ul class="backup-list">
+              {list.map((b) => (
+                <li key={b.id}>
+                  <span>
+                    {when(b.at)} <span class="hint">· {Math.max(1, Math.round(b.size / 1024))} KB</span>
+                  </span>
+                  <button
+                    onClick={() =>
+                      attempt(async () => {
+                        const dir = await busy('Downloading from Google Drive…', () => fromDrive(googleDrive(), b));
+                        if (dir) await compareAndRestore(s, dir, when(b.at), onRestored);
+                      })
+                    }
+                  >
+                    Compare or restore…
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 

@@ -146,6 +146,10 @@ original, with the password or the recovery code of its time.
 - **When exiting:** into the chosen folder (as the desktop version does), with the
   same kind of thinning.
 - **Back up now:** into any folder, such as a USB stick.
+- **Google Drive:** the backup folder packed into one file (`.usbackup`: a header listing the
+  files, then their bytes, which are still encrypted), in a "Utility Soft backups" folder made
+  by the app. Each file is labelled with a keyed hash of the data key, so backups of different
+  data can be told apart without revealing anything. Drive keeps the same 7/4/12 thinning.
 - **Restoring:** the app shows what differs, then backs up the current data
   first, so a restore can be undone. It keeps the password and this computer's
   auto-backup folder.
