@@ -48,9 +48,9 @@ After that the app offers **Continue with “…”** and only asks for the pass
   files cannot be read, by anyone using the computer.
 - **The recovery code** is the only way in if the password is forgotten. Nobody can get it
   back for you. The app shows it once as a QR code, with steps beside it: scan it with the
-  phone's camera, copy the text, and keep it as a note in Google Keep. Keep stores it in your
-  Google account, so it survives losing the phone. The app does not go on until you type
-  back a part of the code from the phone. On the password screen, *Forgot the password?*
+  phone's camera and an email with the code opens, ready to send to yourself. Your mailbox
+  keeps it, so it survives losing the phone. The app does not go on until you type back a
+  part of the code from that email. On the password screen, *Forgot the password?*
   takes the code and lets you choose a new password. Utility ▸ *New recovery code* makes a
   new one; the old one stops working.
 - **Locks itself after 15 minutes** without use, so a computer left on does not show the bills.

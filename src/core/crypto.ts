@@ -147,8 +147,8 @@ export function newRecoveryCode(): string {
  * also the whole text of the saved note), or null when it cannot be one.
  */
 export function normalizeRecoveryCode(typed: string): string | null {
-  // The note's text: "Utility Soft recovery code for “…”: 1A2B-3C4D-…"
-  const inNote = /([0-9a-z]{4}(?:[-\s][0-9a-z]{4}){5})\s*$/i.exec(typed.trim());
+  // A whole pasted email or note: the code is the 6 groups of 4 with dashes in it.
+  const inNote = /(?:^|[^0-9a-z])([0-9a-z]{4}(?:-[0-9a-z]{4}){5})(?![0-9a-z])/i.exec(typed) ?? /([0-9a-z]{4}(?:[-\s][0-9a-z]{4}){5})\s*$/i.exec(typed.trim());
   const t = (inNote ? inNote[1] : typed).toUpperCase().replace(/[\s-]/g, '').replace(/O/g, '0').replace(/[IL]/g, '1');
   if (t.length !== 24 || [...t].some((c) => !ALPHABET.includes(c))) return null;
   return t.match(/.{4}/g)!.join('-');

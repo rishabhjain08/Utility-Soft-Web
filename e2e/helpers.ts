@@ -116,7 +116,7 @@ export async function migrateTo(page: Page, picker: FolderPicker, dest: string):
 export async function saveRecoveryCode(page: Page): Promise<string> {
   await expect(page.getByRole('heading', { name: 'Save your recovery code' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Continue' })).toBeDisabled();
-  await page.getByRole('button', { name: "Can't scan? Show the code as text" }).click();
+  await page.getByRole('button', { name: "Can't scan? Show the code to write down" }).click();
   const code = (await page.getByLabel('Recovery code', { exact: true }).textContent())!.trim();
   const label = (await page.locator('.check-code span').textContent())!;
   const n = Number(/Group (\d)/.exec(label)![1]);

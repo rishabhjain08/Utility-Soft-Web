@@ -33,8 +33,9 @@ That layout can still be read (*Move to the new format*, *Compare*) and written
   - by the recovery code (24 characters, 120 random bits).
 - **Changing the password re-locks the key only.** Nothing else is re-encrypted,
   and old backups still open with the old password or the recovery code.
-- **The recovery code is shown once**, as a QR code, with steps to save it on a
-  phone (Google Keep). The app does not go on until a part of it is typed back.
+- **The recovery code is shown once**, as a QR code with steps beside it. The QR
+  code is a `mailto:` link that opens an email with the code, which the person
+  sends to themselves. The app does not go on until a part of it is typed back.
   Until then, `utility-soft.json` says `recoverySaved: false` and the app asks
   again. Utility ▸ *New recovery code* makes a new one; it needs the password,
   and the old code stops working only once the new one is saved.

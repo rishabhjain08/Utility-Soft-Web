@@ -23,7 +23,14 @@ export function RecoverySetup({ ws, folder, onDone, onCancel }: { ws: WebBooks; 
   const want = groups[group - 1];
   const norm = typed.toUpperCase().replace(/\s/g, '').replace(/O/g, '0').replace(/[IL]/g, '1');
   const right = norm === want;
-  const qr = useMemo(() => renderSVG(`Utility Soft recovery code for “${folder}”: ${code}`, { border: 2, ecc: 'M' }), [code]);
+  // A "mailto:" link: every phone camera opens it as a ready email to send to yourself.
+  // (A QR code of plain text is not understood by every camera app.)
+  const mail = useMemo(() => {
+    // Short, so the QR code stays easy to scan.
+    const body = `${code}\n\nUtility Soft recovery code for "${folder}". Keep this email.`;
+    return `mailto:?subject=${encodeURIComponent('Utility Soft recovery code')}&body=${encodeURIComponent(body)}`;
+  }, [code]);
+  const qr = useMemo(() => renderSVG(mail, { border: 2, ecc: 'L' }), [mail]);
 
   const save = () =>
     busy('Saving…', async () => {
@@ -43,7 +50,7 @@ export function RecoverySetup({ ws, folder, onDone, onCancel }: { ws: WebBooks; 
       >
         <h1>Save your recovery code</h1>
         <p class="lead">
-          If you ever forget the password, this code is the only way to open your bills. Nobody can get it back for you, so save it on your phone now.
+          If you ever forget the password, this code is the only way to open your bills. Nobody can get it back for you, so email it to yourself now.
         </p>
         <div class="recovery">
           <div class="qr-box">
@@ -54,23 +61,24 @@ export function RecoverySetup({ ws, folder, onDone, onCancel }: { ws: WebBooks; 
               </p>
             ) : (
               <button type="button" class="link" onClick={() => setAsText(true)}>
-                Can't scan? Show the code as text
+                Can't scan? Show the code to write down
               </button>
             )}
           </div>
           <ol class="steps">
             <li>
-              On your phone, open the <b>Camera</b> (or <b>Google Lens</b>) and point it at the square code.
+              On your phone, open the <b>Camera</b> and point it at the square code. Tap the link that appears.
             </li>
             <li>
-              Tap the text that appears, then tap <b>Copy</b>.
+              Your email app opens with an email already written, called <i>Utility Soft recovery code</i>. Type <b>your own email address</b> in
+              “To” and tap <b>Send</b>.
+              <span class="hint"> It stays in your mailbox (for Gmail, in your Google account), so it is safe even if you lose the phone.</span>
             </li>
             <li>
-              Open <b>Google Keep</b>, tap <b>+</b> for a new note, paste the text and name the note <i>Utility Soft recovery code</i>.
-              <span class="hint"> Keep saves it in your Google account, so it is safe even if you lose the phone.</span>
+              Open the email you just received.
             </li>
             <li>
-              To check it was saved, type <b>group {group}</b> of the code from your note (the {ordinal(group)} block of 4 characters):
+              To check it was sent, type <b>group {group}</b> of the code from the email (the {ordinal(group)} block of 4 characters):
               <label class="field check-code">
                 <span>Group {group} of the code</span>
                 <input
@@ -82,7 +90,7 @@ export function RecoverySetup({ ws, folder, onDone, onCancel }: { ws: WebBooks; 
                   onInput={(e) => setTyped((e.target as HTMLInputElement).value)}
                 />
               </label>
-              {norm.length >= 4 && !right && <p class="warn">That is not group {group}. Look again at the note on your phone.</p>}
+              {norm.length >= 4 && !right && <p class="warn">That is not group {group}. Look again at the email on your phone.</p>}
             </li>
           </ol>
         </div>
@@ -141,18 +149,18 @@ export function RecoveryLogin({ dir, onOpened, onBack }: { dir: FsDir; onOpened:
         <form class="card" onSubmit={open}>
           <h1>Forgot the password?</h1>
           <p class="lead">
-            The recovery code opens <b>{dir.name}</b> and lets you choose a new password. It was shown as a QR code when this data was set up, to
-            save on your phone.
+            The recovery code opens <b>{dir.name}</b> and lets you choose a new password. It was shown as a QR code when this data was set up, and
+            emailed from your phone.
           </p>
           <div class="notice find-code">
             <p>
-              <b>Where to find it:</b> on your phone, open <b>Google Keep</b> and search for <b>recovery code</b>. The note is called{' '}
-              <i>Utility Soft recovery code</i>, and its text starts with <i>Utility Soft recovery code for “{dir.name}”</i>.
+              <b>Where to find it:</b> search your email for <b>Utility Soft recovery code</b> (look in Sent too). The email says{' '}
+              <i>Utility Soft recovery code for "{dir.name}"</i>. (If you saved it in Google Keep earlier, search there for <b>recovery code</b>.)
             </p>
             <p>
               <b>What it looks like:</b> 24 letters and digits in 6 groups of 4, such as <code>7K2Q-M9XD-4R1T-B8VN-3HJW-P6CZ</code>.
             </p>
-            <p class="hint">Type it, or paste the whole note. Small letters, spaces, and O for 0 are all fine.</p>
+            <p class="hint">Type it, or paste the whole email. Small letters, spaces, and O for 0 are all fine.</p>
           </div>
           <label class="field">
             <span>Recovery code</span>
