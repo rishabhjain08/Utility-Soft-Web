@@ -79,6 +79,30 @@ After that the app offers **Continue with “…”** and only asks for the pass
   version can be put back.
 - Utility ▸ *Problem log* lists what went wrong, on every computer, to send to whoever helps you.
 
+## Beyond the desktop version
+
+- **Payments:** under each bill, *Money received…* and *Agreed a lower amount…* (when a client
+  negotiates the fee down: type the amount agreed for the whole bill). The bill itself and its
+  printout stay as they are. The client list shows what each client was billed and what is
+  due. **Payments** (Alt+P) lists every bill of a year, or of all years, with totals for
+  billed, received, reduced and due. You can filter it to due or paid bills, search it,
+  sort it, and open a bill from it.
+- **Client details** (all optional): PAN, GSTIN, address, phone, email, in *Modify*. They are
+  kept once per client, the same in every year, and PAN and GSTIN show at the top of the
+  client's bills.
+- **Bill No.:** *Add new* fills in the next free number (after the highest one used this
+  year; in a new year, after the year before's). You can change it, or clear it. A Bill No.
+  used by two clients is marked in the list, and *Modify* says who else has it. A client with
+  several bills can have a range, such as 145-147.
+- **One-click PDF** of a bill (*PDF* in the bill window), saved in Downloads, or *Share…*
+  straight to WhatsApp, email and so on, where Windows offers it.
+- **Search all years** (Ctrl+Shift+F): client names, bill names and any text in a bill, in
+  every year; Enter opens it.
+- **Tabs** (Utility ▸ *Tabs*): add, rename, reorder or hide bill types. A hidden tab still
+  shows for a client that has bills in it.
+- **Amounts with Indian commas** while typing (1,25,000); a bill row's text can be added to
+  the drop-down list from its ⋯ menu; **?** lists every keyboard shortcut.
+
 ## Features (Java ▸ web)
 
 | Java program | Web app |

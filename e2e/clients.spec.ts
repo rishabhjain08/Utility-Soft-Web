@@ -13,10 +13,10 @@ test('login: wrong password, forgotten password with the recovery code, change p
   await expect(page.getByText('Wrong password')).toBeVisible();
 
   // Forgot it: the recovery code opens the data, then a new password is chosen.
-  await page.getByRole('button', { name: 'Forgot the password?' }).click();
+  await page.getByRole('button', { name: 'Forgot the password? Use the recovery code…' }).click();
   await page.getByLabel('Recovery code').fill('AAAA-BBBB-CCCC-DDDD-EEEE-FFFF');
   await page.getByRole('button', { name: 'Open' }).click();
-  await expect(page.getByText('This is not the recovery code of this folder.')).toBeVisible();
+  await expect(page.getByText(/This is not the recovery code of/)).toBeVisible();
   await page.getByLabel('Recovery code').fill(data.recoveryCode.toLowerCase().replace(/-/g, ' '));
   await page.getByRole('button', { name: 'Open' }).click();
   await page.getByLabel('New password', { exact: true }).fill('secret 1');
@@ -50,8 +50,10 @@ test('clients: add, late entry, modify, bill no., delete, search, keyboard', asy
   await page.locator('.table-wrap').focus();
   await page.keyboard.press('Insert');
   await page.getByLabel('Name').fill('mohan');
-  await page.keyboard.press('Enter');
-  await expectClients(page, ['1|MOHAN|', '2|PREM|', '3|RISHABH|']);
+  // The next free Bill No. is offered (none used yet: 1), and can be changed.
+  await expect(page.getByLabel('Bill No.')).toHaveValue('1');
+  await page.getByLabel('Name').press('Enter');
+  await expectClients(page, ['1|MOHAN|1', '2|PREM|', '3|RISHABH|']);
 
   // Duplicate names are refused (case-insensitive).
   await page.getByRole('button', { name: 'Add new' }).click();
@@ -64,8 +66,13 @@ test('clients: add, late entry, modify, bill no., delete, search, keyboard', asy
   await expect(page.locator('.serial-choice')).toContainText('2, in alphabetical order Also changes PREM 2 → 3, RISHABH 3 → 4.');
   await page.getByLabel(/keeping everyone else/).check();
   await expect(page.locator('.serial-choice')).toContainText('1A, keeping everyone else’s S.No.');
+  await expect(page.getByLabel('Bill No.')).toHaveValue('2');
+  // A number already used is pointed out.
+  await page.getByLabel('Bill No.').fill('1');
+  await expect(page.getByText('Also used by MOHAN.')).toBeVisible();
+  await page.getByLabel('Bill No.').fill('');
   await page.getByRole('button', { name: 'Add', exact: true }).click();
-  await expectClients(page, ['1|MOHAN|', '1A|PRAKASH|', '2|PREM|', '3|RISHABH|']);
+  await expectClients(page, ['1|MOHAN|1', '1A|PRAKASH|', '2|PREM|', '3|RISHABH|']);
   expect(await data.hasClient('06-07', 'PRAKASH')).toBe(true);
   expect(await data.serial('06-07', 'PRAKASH')).toBe('1A');
 
@@ -73,7 +80,7 @@ test('clients: add, late entry, modify, bill no., delete, search, keyboard', asy
   await page.locator('tr', { hasText: 'PREM' }).filter({ hasNot: page.getByText('PRAKASH') }).locator('td.billno').dblclick();
   await page.getByLabel('Bill No.').fill('101-103');
   await page.keyboard.press('Enter');
-  await expectClients(page, ['1|MOHAN|', '1A|PRAKASH|', '2|PREM|101-103', '3|RISHABH|']);
+  await expectClients(page, ['1|MOHAN|1', '1A|PRAKASH|', '2|PREM|101-103', '3|RISHABH|']);
   expect(await data.billNo('06-07', 'PREM')).toBe('101-103');
 
   // Modify: rename RISHABH to AMIT (moves to the top, renumbers) and change bill no.
@@ -84,7 +91,7 @@ test('clients: add, late entry, modify, bill no., delete, search, keyboard', asy
   await expect(page.locator('.serial-single')).toHaveText('S.No. 1 Also changes MOHAN 1 → 2, PRAKASH 1A → 2A, PREM 2 → 3.');
   await page.getByLabel('Bill No.').fill('b-9');
   await page.getByRole('button', { name: 'Save' }).click();
-  await expectClients(page, ['1|AMIT|B-9', '2|MOHAN|', '2A|PRAKASH|', '3|PREM|101-103']);
+  await expectClients(page, ['1|AMIT|B-9', '2|MOHAN|1', '2A|PRAKASH|', '3|PREM|101-103']);
   expect(await data.hasClient('06-07', 'RISHABH')).toBe(false);
   expect(await data.bill('06-07', 'AMIT', 'Audit', 'PREM CHAND')).toEqual(['pooja,20']);
 

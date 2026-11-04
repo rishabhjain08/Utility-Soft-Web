@@ -43,6 +43,8 @@ async function journey(page: Page) {
     await page.getByRole('button', { name: 'Add new' }).click();
     await page.getByLabel('Name').fill(name);
     if (late) await page.getByLabel(/keeping everyone else/).check();
+    // Bill No. is given later (in the list).
+    await page.getByLabel('Bill No.').fill('');
     await page.getByRole('button', { name: 'Add', exact: true }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
   };
@@ -117,9 +119,11 @@ async function journey(page: Page) {
 
   // A new tab and its drop-down list.
   await page.getByRole('button', { name: 'Utility…', exact: true }).click();
-  await page.getByRole('button', { name: /Add new tab/ }).click();
+  await page.getByRole('button', { name: /Tabs…/ }).click();
+  await page.getByRole('button', { name: '+ Add new tab…' }).click();
   await page.getByLabel('Tab name').fill('GST');
   await page.getByRole('button', { name: 'OK' }).click();
+  await page.getByRole('dialog', { name: 'Tabs' }).locator('.modal-foot button').click();
   await page.getByRole('button', { name: 'Utility…', exact: true }).click();
   await page.getByRole('button', { name: /Edit drop-down lists/ }).click();
   const dd = page.getByRole('dialog', { name: 'Edit drop-down lists' });

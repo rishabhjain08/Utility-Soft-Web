@@ -69,11 +69,13 @@ test('setup: add a tab, edit drop-down lists, letterhead', async ({ page }) => {
   await login(page, picker, data.dir);
 
   await page.getByRole('button', { name: 'Utility…', exact: true }).click();
-  await page.getByRole('button', { name: /Add new tab/ }).click();
+  await page.getByRole('button', { name: /Tabs…/ }).click();
+  await page.getByRole('button', { name: '+ Add new tab…' }).click();
   await page.getByLabel('Tab name').fill('GST');
   await page.getByRole('button', { name: 'OK' }).click();
   await expect(page.getByText('Added the tab GST.')).toBeVisible();
   expect(await data.tabs()).toEqual(['Audit', 'Vat', 'Tax', 'Others', 'GST']);
+  await page.keyboard.press('Escape');
 
   await page.getByRole('button', { name: 'Utility…', exact: true }).click();
   await page.getByRole('button', { name: /Edit drop-down lists/ }).click();

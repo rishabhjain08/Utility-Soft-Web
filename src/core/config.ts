@@ -18,6 +18,8 @@ export interface BillType {
   folder: string;
   /** Tab title shown to the user (also the key in ddown.txt). */
   tab: string;
+  /** Not shown for clients that have no bills in it (web format only). */
+  hidden?: boolean;
 }
 
 export interface Letterhead {

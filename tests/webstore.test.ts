@@ -60,7 +60,7 @@ describe('web format', () => {
     expect(await web.checkPassword('puja')).toBe(true);
     expect(await web.checkPassword('Puja')).toBe(false);
     expect(await web.years()).toEqual(['06-07']);
-    expect(await web.clients('06-07')).toEqual([
+    expect(await web.clients('06-07')).toMatchObject([
       { name: 'PREM', serial: '1', billNo: '' },
       { name: 'RISHABH', serial: '2', billNo: '' },
     ]);
@@ -135,7 +135,7 @@ describe('web format', () => {
     expect(await web.addNextYear()).toBe('07-08');
     expect((await web.planCopy('06-07', '07-08')).fresh.map((c) => c.name)).toEqual(['PREM', 'RISHABH']);
     await web.copyClients('06-07', '07-08', ['RISHABH']);
-    expect(await web.clients('07-08')).toEqual([{ name: 'RISHABH', serial: '2', billNo: '55' }]);
+    expect(await web.clients('07-08')).toMatchObject([{ name: 'RISHABH', serial: '2', billNo: '55' }]);
     const rows = await web.readBill('07-08', 'RISHABH', 'Audit', 'PREM CHAND');
     expect(rows).toEqual([
       { desc: 'Fee for Tax Audit for the Assessment Year 07-08', amount: '0' },
@@ -159,7 +159,7 @@ describe('web format', () => {
     await web.setBillNo('06-07', 'PREM', '7');
     await web.addClient('07-08', 'prem', false);
     expect(await web.readBill('07-08', 'PREM', 'Others', 'X')).toEqual([{ desc: 'Misc', amount: '0' }]);
-    expect((await web.clients('07-08'))[0]).toEqual({ name: 'PREM', serial: '1', billNo: '7' });
+    expect((await web.clients('07-08'))[0]).toMatchObject({ name: 'PREM', serial: '1', billNo: '7' });
   });
 
   it('keeps earlier years linked to a client after it is renamed', async () => {
@@ -216,7 +216,7 @@ describe('web format', () => {
     await fresh.addYear('26-27');
     expect(existsSync(join(d, 'years/26-27'))).toBe(true);
     await fresh.addClient('26-27', 'Asha', false);
-    expect(await fresh.clients('26-27')).toEqual([{ name: 'ASHA', serial: '1', billNo: '' }]);
+    expect(await fresh.clients('26-27')).toMatchObject([{ name: 'ASHA', serial: '1', billNo: '' }]);
     expect(everything(d)).not.toContain('ASHA');
     expect(everything(d)).not.toContain('Expenses');
   });

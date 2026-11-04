@@ -231,6 +231,7 @@ export async function exportToDesktop(web: WebBooks, dest: FsDir, password: stri
   // same bill (by name, ignoring case) of the three years before.
   const written = new Map<string, Map<string, string[]>>();
   const key = (client: string, type: string, bill: string) => `${client}|${type}|${bill}`.toLowerCase();
+  let webOnly = (await web.vault.list(['clients'])).length > 0;
   for (const year of await web.years()) {
     const y = await bills.dir(year, true);
     const these = new Map<string, string[]>();
@@ -243,6 +244,7 @@ export async function exportToDesktop(web: WebBooks, dest: FsDir, password: stri
       const typeDirs = new Map<string, FsDir>();
       for (const t of s.billTypes) typeDirs.set(t.folder, await c.dir(t.folder, true));
       for (const b of rec.bills) {
+        if (b.payments?.length || b.printed) webOnly = true;
         const k = key(rec.name, b.type, b.name);
         // Rows the desktop version could not open get trailing spaces (see protectForJava).
         const lines = protectForJava(linesFromGroups(b.groups), earlier.map((m) => m?.get(k) ?? null));
@@ -274,5 +276,6 @@ export async function exportToDesktop(web: WebBooks, dest: FsDir, password: stri
 
   onProgress?.('Checking the export…');
   const report = await verify({ program: dest, data }, web, { relocated, onProgress });
+  if (webOnly) report.notes.push('Client details, payments and dates printed are not part of the desktop version, so they are not in the export.');
   return { relocated, report };
 }

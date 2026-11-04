@@ -190,16 +190,18 @@ export function Login({
           <button type="button" onClick={onBack}>
             Back
           </button>
-          {place.kind === 'web' && (
-            <button type="button" class="link" onClick={onRecovery}>
-              Forgot the password?
-            </button>
-          )}
           <span class="grow" />
           <button class="primary" type="submit">
             OK
           </button>
         </div>
+        {place.kind === 'web' && (
+          <div class="forgot">
+            <button type="button" onClick={onRecovery}>
+              Forgot the password? Use the recovery code…
+            </button>
+          </div>
+        )}
       </form>
     </div>
   );

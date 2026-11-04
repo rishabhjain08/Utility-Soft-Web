@@ -116,10 +116,10 @@ export function RecoveryLogin({ dir, onOpened, onBack }: { dir: FsDir; onOpened:
   const open = (e: Event) => {
     e.preventDefault();
     attempt(async () => {
-      if (!normalizeRecoveryCode(code)) return setError('A recovery code has 24 letters and digits, like 1A2B-3C4D-…');
+      if (!normalizeRecoveryCode(code)) return setError('That is not a whole recovery code: it has 24 letters and digits in 6 groups of 4.');
       const w = await busy('Checking…', () => unlockWithRecovery(dir, code));
       if (w === undefined) return;
-      if (!w) return setError('This is not the recovery code of this folder.');
+      if (!w) return setError(`This is not the recovery code of ${dir.name}. If you have more than one note, try the other one; a newer code replaces older ones.`);
       setError(null);
       setWs(w);
     });
@@ -140,10 +140,23 @@ export function RecoveryLogin({ dir, onOpened, onBack }: { dir: FsDir; onOpened:
       {!ws ? (
         <form class="card" onSubmit={open}>
           <h1>Forgot the password?</h1>
-          <p class="lead">Type the recovery code you saved on your phone (in Google Keep: “Utility Soft recovery code”).</p>
+          <p class="lead">
+            The recovery code opens <b>{dir.name}</b> and lets you choose a new password. It was shown as a QR code when this data was set up, to
+            save on your phone.
+          </p>
+          <div class="notice find-code">
+            <p>
+              <b>Where to find it:</b> on your phone, open <b>Google Keep</b> and search for <b>recovery code</b>. The note is called{' '}
+              <i>Utility Soft recovery code</i>, and its text starts with <i>Utility Soft recovery code for “{dir.name}”</i>.
+            </p>
+            <p>
+              <b>What it looks like:</b> 24 letters and digits in 6 groups of 4, such as <code>7K2Q-M9XD-4R1T-B8VN-3HJW-P6CZ</code>.
+            </p>
+            <p class="hint">Type it, or paste the whole note. Small letters, spaces, and O for 0 are all fine.</p>
+          </div>
           <label class="field">
             <span>Recovery code</span>
-            <input autoFocus value={code} autoComplete="off" spellcheck={false} onInput={(e) => (setCode((e.target as HTMLInputElement).value), setError(null))} />
+            <input autoFocus value={code} autoComplete="off" spellcheck={false} placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" onInput={(e) => (setCode((e.target as HTMLInputElement).value), setError(null))} />
           </label>
           {error && <p class="warn">{error}</p>}
           <div class="row">

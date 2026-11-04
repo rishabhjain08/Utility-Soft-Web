@@ -15,6 +15,7 @@ That layout can still be read (*Move to the new format*, *Compare*) and written
       k3j9x0q2ma.dat             one client in one year
     07-08/
       k3j9x0q2ma.dat             the same client the next year (same id)
+  clients/<id>.dat               optional details of a client (PAN, GSTIN…), the same in every year
   open/<hash>.lock               a client open on a computer right now
   journal/<time>-<id>.dat        a change of several files, while it is being made
   history/<path>/<time>.dat      earlier versions of each client file and of the settings
@@ -121,6 +122,12 @@ That layout can still be read (*Move to the new format*, *Compare*) and written
 }
 ```
 
+- A bill may also have `payments`: money received (`"kind": "received"`) and reductions
+  agreed with the client (`"kind": "reduced"`), each with a date (yyyy-mm-dd), an amount in
+  whole rupees and an optional note. It may also have `printed`, the date last printed or
+  saved as PDF. Copying a client to another year does not copy them.
+- `clients/<id>.dat` holds the optional details of a client, kept by the same id as its year
+  files: `{ "pan": "ABCDE1234F", "gstin": "…", "address": "…", "phone": "…", "email": "…" }`.
 - A year exists when its folder exists, even if empty.
 - Groups are rows printed together with their own subtotal. The desktop version
   separates them with `New Name` rows.
@@ -195,5 +202,8 @@ folder into a new folder:
 - The export is then checked.
 - To use it, copy `billing.jar` and its `lib` folder into it.
 - The export is not encrypted.
+- Client details, payments and dates printed have no place in the desktop version and are not
+  exported (the report says so). Renamed tabs are exported with their new titles; hidden tabs
+  are shown there.
 
 The real Java program is tested on such exports by `compat/check_web_to_java.py`.

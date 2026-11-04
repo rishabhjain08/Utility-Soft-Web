@@ -6,6 +6,8 @@ import { Session, openWebSession } from './session';
 import { Closed, LetterheadForm, Login, Place, SetPassword, Welcome } from './start';
 import { DesktopChoice, openCopy } from './migrate';
 import { RecoveryLogin, RecoverySetup } from './recovery';
+import { PaymentsPage } from './payments';
+import { OpenAt } from './search';
 import { Main } from './main';
 import { Editor, confirmNextYearCopy } from './editor';
 import { autoBackup } from './utility';
@@ -26,7 +28,8 @@ type Stage =
   | { kind: 'recovery-setup'; s: Session }
   | { kind: 'letterhead'; s: Session }
   | { kind: 'main'; s: Session }
-  | { kind: 'editor'; s: Session; year: string; client: Client }
+  | { kind: 'editor'; s: Session; year: string; client: Client; at?: { folder?: string; bill?: string }; back?: 'payments' }
+  | { kind: 'payments'; s: Session; year: string | null }
   | { kind: 'closed' };
 
 /** "is open on Office PC since 10:32" */
@@ -64,7 +67,7 @@ export function App() {
     };
   }, []);
 
-  const session = stage.kind === 'main' || stage.kind === 'editor' ? stage.s : null;
+  const session = stage.kind === 'main' || stage.kind === 'editor' || stage.kind === 'payments' ? stage.s : null;
   useEffect(() => setErrorLog(session ? (m) => session.ws.log(m) : null), [session?.ws]);
 
   // Lock after a while without use: back to the password.
@@ -130,13 +133,22 @@ export function App() {
       cancel: 'Cancel',
     });
 
-  const openClient = (s: Session, y: string, client: Client) =>
+  const openClient = (s: Session, y: string, client: Client, at?: { folder?: string; bill?: string }, back?: 'payments') =>
     attempt(async () => {
       const l = await s.ws.lockInfo(y, client.name);
       if (l && !(await confirmOpen(client.name, y, l))) return;
       await mark(() => s.ws.lock(y, client.name));
       held.current = { s, year: y, name: client.name };
-      setStage({ kind: 'editor', s, year: y, client });
+      setStage({ kind: 'editor', s, year: y, client, at, back });
+    });
+
+  /** A client of any year, at a bill (from searching or the payments page). */
+  const openAt = (s: Session, at: OpenAt, back?: 'payments') =>
+    attempt(async () => {
+      const c = (await s.ws.clients(at.year)).find((x) => x.name === at.client);
+      if (!c) return toast(`${at.client} is no longer in ${at.year}.`, 'error');
+      setYear(at.year);
+      await openClient(s, at.year, c, { folder: at.folder, bill: at.bill }, back);
     });
 
   const relock = async (s: Session, from: string, to: string, name: string) => {
@@ -150,14 +162,14 @@ export function App() {
     return true;
   };
 
-  const closeEditor = (s: Session, y: string, name: string) =>
+  const closeEditor = (s: Session, y: string, name: string, back?: 'payments') =>
     attempt(async () => {
       held.current = null;
       await mark(() => s.ws.unlock(y, name));
       await confirmNextYearCopy(s, y, name);
       setYear(y);
       setFocusName(name);
-      setStage({ kind: 'main', s });
+      setStage(back === 'payments' ? { kind: 'payments', s, year: y } : { kind: 'main', s });
     });
 
   const exit = (s: Session) =>
@@ -245,6 +257,8 @@ export function App() {
           }}
           focusName={focusName}
           onOpen={(c) => year && openClient(stage.s, year, c)}
+          onOpenAt={(at) => openAt(stage.s, at)}
+          onPayments={() => setStage({ kind: 'payments', s: stage.s, year })}
           onExit={() => exit(stage.s)}
           onSession={(s) => setStage({ kind: 'main', s })}
         />
@@ -258,9 +272,13 @@ export function App() {
           year={stage.year}
           client={stage.client}
           relock={(from, to, name) => relock(stage.s, from, to, name)}
-          onDone={(y, name) => closeEditor(stage.s, y, name)}
+          at={stage.at}
+          onDone={(y, name) => closeEditor(stage.s, y, name, stage.back)}
         />
       );
+      break;
+    case 'payments':
+      body = <PaymentsPage s={stage.s} year={stage.year} onOpenAt={(at) => openAt(stage.s, at, 'payments')} onBack={() => setStage({ kind: 'main', s: stage.s })} />;
       break;
     case 'closed':
       body = <Closed onReopen={() => setStage({ kind: 'welcome' })} />;

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
-import { Client } from '../core/webstore';
+import { Client, ClientDetails, DETAIL_FIELDS } from '../core/webstore';
+import { billNoClashes, billNumbers } from '../core/billno';
 import { UserError, checkName } from '../core/names';
 import { sameName } from '../core/sort';
 import { InsertPlan, planInsert, planRename, samePlan } from '../core/serial';
@@ -72,6 +73,15 @@ export function AddClientDialog({ s, year, existing, onClose, onAdded }: {
 }) {
   const [name, setName] = useState('');
   const [late, setLate] = useState(false);
+  const [billNo, setBillNo] = useState('');
+  const [next, setNext] = useState<{ next: number; from: string } | null>(null);
+  useEffect(() => {
+    attempt(async () => {
+      const n = await s.ws.suggestBillNo(year);
+      setNext(n);
+      setBillNo(String(n.next));
+    });
+  }, []);
   const duplicate = existing.some((c) => sameName(c.name, name.trim()));
   const problem = name.trim() === '' ? null : duplicate ? 'This name already exists.' : nameProblem(name);
   const can = name.trim() !== '' && !problem;
@@ -80,7 +90,7 @@ export function AddClientDialog({ s, year, existing, onClose, onAdded }: {
   const submit = () => {
     if (!can) return;
     busy('Adding…', async () => {
-      const c = await s.ws.addClient(year, name, late && !!plans && needsChoice(plans.renumber, plans.keep));
+      const c = await s.ws.addClient(year, name, late && !!plans && needsChoice(plans.renumber, plans.keep), billNo.trim().toUpperCase());
       toast(`${c.name} added with S.No. ${c.serial}.`, 'ok');
       onAdded(c.name);
     });
@@ -104,6 +114,7 @@ export function AddClientDialog({ s, year, existing, onClose, onAdded }: {
       </label>
       {problem && <p class="warn">{problem}</p>}
       {plans && <SerialChoice year={year} existing={existing} {...plans} value={late} onChange={setLate} />}
+      <BillNoField year={year} value={billNo} onChange={setBillNo} next={next} clients={existing} self={null} onEnter={submit} />
       <p class="hint">Bills this client had in the previous years are brought in automatically.</p>
     </Modal>
   );
@@ -117,6 +128,19 @@ export function ModifyClientDialog({ s, year, client, existing, onClose, onDone 
   const [name, setName] = useState(client.name);
   const [billNo, setBillNo] = useState(client.billNo);
   const [late, setLate] = useState(false);
+  const [next, setNext] = useState<{ next: number; from: string } | null>(null);
+  const [details, setDetails] = useState<ClientDetails | null>(null);
+  const [loaded, setLoaded] = useState<ClientDetails | null>(null);
+  const [showDetails, setShowDetails] = useState(false);
+  useEffect(() => {
+    attempt(async () => {
+      setNext(await s.ws.suggestBillNo(year));
+      const d = await s.ws.clientDetails(year, client.name);
+      setLoaded(d);
+      setDetails(d);
+      setShowDetails(Object.keys(d).length > 0);
+    });
+  }, []);
   const renamed = name.trim().toUpperCase() !== client.name;
   const collides = renamed && existing.some((c) => c.name !== client.name && sameName(c.name, name.trim()));
   const problem = renamed ? nameProblem(name) : null;
@@ -130,6 +154,7 @@ export function ModifyClientDialog({ s, year, client, existing, onClose, onDone 
     busy('Saving…', async () => {
       const keep = late && !!plans && needsChoice(plans.renumber, plans.keep);
       const n = await s.ws.modifyClient(year, client.name, renamed ? name : client.name, billNo.trim().toUpperCase(), keep);
+      if (details && JSON.stringify(details) !== JSON.stringify(loaded)) await s.ws.saveClientDetails(year, n, details);
       toast(renamed ? `Renamed to ${n}.` : 'Saved.', 'ok');
       onDone(n);
     });
@@ -158,13 +183,82 @@ export function ModifyClientDialog({ s, year, client, existing, onClose, onDone 
           removed.
         </p>
       )}
-      <label class="field">
-        <span>Bill No.</span>
-        <input class="upper" value={billNo} onInput={(e) => setBillNo((e.target as HTMLInputElement).value)} onKeyDown={(e) => e.key === 'Enter' && submit()} />
-      </label>
+      <BillNoField year={year} value={billNo} onChange={setBillNo} next={next} clients={existing} self={client.name} onEnter={submit} />
       {plans && <SerialChoice year={year} existing={existing} {...plans} value={late} onChange={setLate} />}
       <p class="hint">Renaming only changes {year}; earlier years keep the old name.</p>
+      {details &&
+        (showDetails ? (
+          <fieldset class="details">
+            <legend>Client details (optional, the same in every year)</legend>
+            {DETAIL_FIELDS.map((k) => (
+              <label class="field" key={k}>
+                <span>{DETAIL_LABELS[k]}</span>
+                {k === 'address' ? (
+                  <textarea rows={2} value={details[k] ?? ''} onInput={(e) => setDetails({ ...details, [k]: (e.target as HTMLTextAreaElement).value })} />
+                ) : (
+                  <input
+                    class={k === 'pan' || k === 'gstin' ? 'upper' : ''}
+                    type={k === 'email' ? 'email' : k === 'phone' ? 'tel' : 'text'}
+                    value={details[k] ?? ''}
+                    onInput={(e) => setDetails({ ...details, [k]: (e.target as HTMLInputElement).value })}
+                  />
+                )}
+                {detailProblem(k, details[k] ?? '') && <span class="hint warn-text">{detailProblem(k, details[k] ?? '')}</span>}
+              </label>
+            ))}
+          </fieldset>
+        ) : (
+          <button type="button" class="link" onClick={() => setShowDetails(true)}>
+            + Client details (PAN, GSTIN, address, phone, email)
+          </button>
+        ))}
     </Modal>
+  );
+}
+
+export const DETAIL_LABELS: Record<keyof ClientDetails, string> = { pan: 'PAN', gstin: 'GSTIN', address: 'Address', phone: 'Phone', email: 'Email' };
+
+/** A gentle note when a detail does not look right (it is saved anyway). */
+export function detailProblem(k: keyof ClientDetails, v: string): string | null {
+  const t = v.trim().toUpperCase();
+  if (!t) return null;
+  if (k === 'pan' && !/^[A-Z]{5}\d{4}[A-Z]$/.test(t)) return 'A PAN usually looks like ABCDE1234F.';
+  if (k === 'gstin' && !/^\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/.test(t)) return 'A GSTIN usually has 15 characters, like 08ABCDE1234F1Z5.';
+  if (k === 'email' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v.trim())) return 'This does not look like an email address.';
+  return null;
+}
+
+/** Bill No., with the next free number offered and clashes with other clients shown. */
+function BillNoField({ year, value, onChange, next, clients, self, onEnter }: {
+  year: string; value: string; onChange: (v: string) => void; next: { next: number; from: string } | null; clients: Client[]; self: string | null; onEnter: () => void;
+}) {
+  const others = clients.filter((c) => c.name !== self);
+  const clash = billNoClashes([...others, { name: '\u0000', billNo: value }]).get('\u0000') ?? [];
+  const unusual = value.trim() !== '' && billNumbers(value) === null;
+  return (
+    <div class="billno-field">
+      <label class="field">
+        <span>Bill No.</span>
+        <input class="upper" value={value} onInput={(e) => onChange((e.target as HTMLInputElement).value)} onKeyDown={(e) => e.key === 'Enter' && onEnter()} />
+      </label>
+      {next && value.trim() !== String(next.next) && (
+        <button type="button" class="link" onClick={() => onChange(String(next.next))}>
+          Use the next free number: {next.next}
+        </button>
+      )}
+      {next && (
+        <p class="hint">
+          {next.from === 'this year'
+            ? `The highest Bill No. in ${year} so far is ${next.next - 1}.`
+            : next.from === 'the year before'
+              ? `No Bill No. in ${year} yet; the year before ended at ${next.next - 1}. Type 1 to start again.`
+              : `No Bill No. used yet.`}{' '}
+          A client with several bills can have a range, such as 145-147.
+        </p>
+      )}
+      {clash.length > 0 && <p class="warn">Also used by {clash.join(', ')}.</p>}
+      {unusual && <p class="hint">Not a number or range, so it is not checked against other clients.</p>}
+    </div>
   );
 }
 

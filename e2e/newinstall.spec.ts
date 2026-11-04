@@ -56,7 +56,7 @@ test('a new installation in an empty folder, from first year to printed bill', a
   await page.getByRole('button', { name: 'Add new client' }).click();
   await page.getByLabel('Name').fill('sharma traders');
   await page.getByRole('button', { name: 'Add', exact: true }).click();
-  await expectClients(page, ['1|SHARMA TRADERS|']);
+  await expectClients(page, ['1|SHARMA TRADERS|1']);
 
   await page.keyboard.press('Enter');
   await page.getByRole('button', { name: 'New bill…' }).click();
@@ -87,7 +87,7 @@ test('a new installation in an empty folder, from first year to printed bill', a
   expect(rec).toMatchObject({
     name: 'SHARMA TRADERS',
     serial: '1',
-    billNo: '',
+    billNo: '1',
     bills: [{ type: 'Audit', name: 'RAMESH SHARMA', groups: [{ rows: [{ text: 'Fee for Tax Audit for the Assessment Year ##', amount: 25000 }, { text: 'Expenses', amount: 1500 }] }] }],
   });
   expect(await ws.openClients()).toEqual([['26-27', 'SHARMA TRADERS']]);

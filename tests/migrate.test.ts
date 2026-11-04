@@ -80,6 +80,8 @@ describe('migration to the web format', () => {
     const web = (await WebBooks.unlockWithRecovery(new NodeDir(dest), typed, FAST))!;
     expect(await web.clientNames('07-08')).toEqual(['MOHAN', 'RISHABH']);
     expect(await WebBooks.unlockWithRecovery(new NodeDir(dest), 'AAAA-AAAA-AAAA-AAAA-AAAA-AAAA')).toBe(null);
+    // The whole note pasted works too.
+    expect(await WebBooks.unlockWithRecovery(new NodeDir(dest), `Utility Soft recovery code for “X”: ${r.recoveryCode}`)).not.toBe(null);
     // A new password, set after recovering.
     await web.setPassword('new one');
     expect(await WebBooks.unlock(new NodeDir(dest), 'new one')).not.toBe(null);

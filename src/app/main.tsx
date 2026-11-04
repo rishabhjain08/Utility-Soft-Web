@@ -5,6 +5,9 @@ import { Session } from './session';
 import { AddClientDialog, CopyYearsDialog, DeleteClientsDialog, ModifyClientDialog } from './dialogs';
 import { UtilityDialog } from './utility';
 import { printBills, printIndex } from './printing';
+import { groupIndian } from '../core/money';
+import { billNoClashes } from '../core/billno';
+import { KeysDialog, OpenAt, SearchDialog } from './search';
 import { attempt, busy, confirmDialog, promptDialog, toast } from './ui';
 
 type Dialog =
@@ -13,6 +16,8 @@ type Dialog =
   | { kind: 'delete'; clients: Client[] }
   | { kind: 'utility' }
   | { kind: 'copy' }
+  | { kind: 'search' }
+  | { kind: 'keys' }
   | null;
 
 interface Props {
@@ -20,12 +25,15 @@ interface Props {
   year: string | null;
   setYear: (y: string | null) => void;
   onOpen: (client: Client) => void;
+  /** Opens a client of any year, at a bill (from search or the payments page). */
+  onOpenAt: (at: OpenAt) => void;
+  onPayments: () => void;
   onExit: () => void;
   onSession: (s: Session) => void;
   focusName?: string | null;
 }
 
-export function Main({ s, year, setYear, onOpen, onExit, onSession, focusName }: Props) {
+export function Main({ s, year, setYear, onOpen, onOpenAt, onPayments, onExit, onSession, focusName }: Props) {
   const [years, setYears] = useState<string[] | null>(null);
   const [clients, setClients] = useState<Client[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -103,6 +111,7 @@ export function Main({ s, year, setYear, onOpen, onExit, onSession, focusName }:
   }, [cursor, clients]);
 
   const list = clients ?? [];
+  const clashes = useMemo(() => billNoClashes(list), [list]);
   const current = list[cursor] as Client | undefined;
   const chosen = useMemo(() => list.filter((c) => selected.has(c.name)), [list, selected]);
   const targets = chosen.length ? chosen : current ? [current] : [];
@@ -201,6 +210,15 @@ export function Main({ s, year, setYear, onOpen, onExit, onSession, focusName }:
     } else if (e.altKey && k.toLowerCase() === 'u') {
       e.preventDefault();
       setDialog({ kind: 'utility' });
+    } else if (e.altKey && k.toLowerCase() === 'p') {
+      e.preventDefault();
+      onPayments();
+    } else if (ctrl && e.shiftKey && k.toLowerCase() === 'f') {
+      e.preventDefault();
+      setDialog({ kind: 'search' });
+    } else if (k === '?') {
+      e.preventDefault();
+      setDialog({ kind: 'keys' });
     } else if (e.altKey && k.toLowerCase() === 'q') {
       e.preventDefault();
       onExit();
@@ -285,7 +303,13 @@ export function Main({ s, year, setYear, onOpen, onExit, onSession, focusName }:
             }}
           />
         </div>
+        <button onClick={() => setDialog({ kind: 'search' })} title="Search all years (Ctrl+Shift+F)">
+          Search all years…
+        </button>
         <div class="spacer" />
+        <button class="icon-btn" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)" onClick={() => setDialog({ kind: 'keys' })}>
+          ?
+        </button>
         <button onClick={() => setDialog({ kind: 'utility' })} title="Utility (Alt+U)">
           Utility…
         </button>
@@ -354,6 +378,10 @@ export function Main({ s, year, setYear, onOpen, onExit, onSession, focusName }:
             <button onClick={() => printIndex(s, year!)} title="Print the index sheet of this year">
               Print index
             </button>
+            <span class="sep" />
+            <button onClick={() => onPayments()} title="Who has paid, and what is due (Alt+P)">
+              Payments
+            </button>
           </div>
           <div class="table-wrap" tabIndex={0} ref={tableRef} onKeyDown={onKey} aria-label="Clients" role="grid">
             <table class="clients">
@@ -362,6 +390,8 @@ export function Main({ s, year, setYear, onOpen, onExit, onSession, focusName }:
                   <th class="sno">S.No.</th>
                   <th>Name</th>
                   <th class="billno">Bill No.</th>
+                  <th class="money">Billed</th>
+                  <th class="money">Due</th>
                 </tr>
               </thead>
               <tbody>
@@ -382,16 +412,32 @@ export function Main({ s, year, setYear, onOpen, onExit, onSession, focusName }:
                   >
                     <td class="sno">{c.serial}</td>
                     <td class="name">{c.name}</td>
-                    <td class="billno" title="Double-click to edit">
+                    <td
+                      class={`billno ${clashes.has(c.name) ? 'clash' : ''}`}
+                      title={clashes.has(c.name) ? `Same Bill No. as ${clashes.get(c.name)!.join(', ')}. Double-click to edit.` : 'Double-click to edit'}
+                    >
                       {editing === c.name ? (
                         <BillNoInput value={c.billNo} onDone={(v) => (v === null ? setEditing(null) : saveBillNo(c, v))} />
                       ) : (
                         c.billNo
                       )}
                     </td>
+                    <td class="money">{c.billed ? groupIndian(c.billed) : ''}</td>
+                    <td class={`money ${c.due && c.due > 0 ? 'due' : ''}`}>{c.billed ? (c.due! > 0 ? groupIndian(c.due!) : c.due! < 0 ? `${groupIndian(-c.due!)} extra` : 'Paid') : ''}</td>
                   </tr>
                 ))}
               </tbody>
+              {list.length > 0 && (
+                <tfoot>
+                  <tr>
+                    <td />
+                    <td>Total</td>
+                    <td />
+                    <td class="money">{groupIndian(list.reduce((t, c) => t + (c.billed ?? 0), 0))}</td>
+                    <td class="money">{groupIndian(list.reduce((t, c) => t + Math.max(0, c.due ?? 0), 0))}</td>
+                  </tr>
+                </tfoot>
+              )}
             </table>
             {clients !== null && list.length === 0 && (
               <div class="empty">
@@ -437,6 +483,8 @@ export function Main({ s, year, setYear, onOpen, onExit, onSession, focusName }:
           }}
         />
       )}
+      {dialog?.kind === 'search' && <SearchDialog s={s} onClose={() => setDialog(null)} onOpen={(h) => (setDialog(null), onOpenAt(h))} />}
+      {dialog?.kind === 'keys' && <KeysDialog onClose={() => setDialog(null)} />}
       {dialog?.kind === 'utility' && (
         <UtilityDialog
           s={s}

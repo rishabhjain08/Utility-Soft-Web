@@ -106,7 +106,7 @@ test('moves to the web format with real folder handles, works on it and remember
   await page.getByRole('button', { name: 'Add new' }).click();
   await page.getByLabel('Name').fill('mohan');
   await page.getByRole('button', { name: 'Add', exact: true }).click();
-  await expectClients(page, ['1|MOHAN|', '2|PREM|', '3|RISHABH|']);
+  await expectClients(page, ['1|MOHAN|1', '2|PREM|', '3|RISHABH|']);
   await page.getByRole('cell', { name: 'RISHABH' }).dblclick();
   await page.locator('.grid [data-row="0"][data-col="amount"]').fill('35');
   await waitSaved(page);
@@ -127,7 +127,7 @@ test('moves to the web format with real folder handles, works on it and remember
   await page.getByRole('button', { name: 'Continue with “copy”' }).click();
   await page.getByLabel('Password').fill('puja');
   await page.getByRole('button', { name: 'OK' }).click();
-  await expectClients(page, ['1|MOHAN|', '2|PREM|', '3|RISHABH|']);
+  await expectClients(page, ['1|MOHAN|1', '2|PREM|', '3|RISHABH|']);
   await page.getByRole('cell', { name: 'RISHABH' }).dblclick();
   await expect(page.getByRole('tab', { name: 'PREM CHAND JI' })).toHaveAttribute('aria-selected', 'true');
   await expect.poll(() => gridRows(page)).toEqual(['pooja|35']);
@@ -141,5 +141,5 @@ test('moves to the web format with real folder handles, works on it and remember
   await page.getByRole('button', { name: 'OK' }).click();
   await expect(page.locator('.notice')).toContainText('This folder was already copied to copy');
   await page.getByRole('button', { name: 'Open “copy”' }).click();
-  await expectClients(page, ['1|MOHAN|', '2|PREM|', '3|RISHABH|']);
+  await expectClients(page, ['1|MOHAN|1', '2|PREM|', '3|RISHABH|']);
 });

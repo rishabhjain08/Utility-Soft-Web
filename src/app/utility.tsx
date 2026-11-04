@@ -13,7 +13,7 @@ import { Prefs, hasRememberedPath, loadPrefs, pickFolder, rememberPath, remember
 import { printBills, printIndex } from './printing';
 import { Modal, attempt, busy, confirmDialog, mountDialog, promptDialog, setBusyLabel, toast } from './ui';
 
-type Sub = 'dropdowns' | 'letterhead' | 'password' | 'backup' | 'bin' | 'log' | 'recovery' | null;
+type Sub = 'dropdowns' | 'letterhead' | 'password' | 'backup' | 'bin' | 'log' | 'recovery' | 'tabs' | null;
 
 interface Props {
   s: Session;
@@ -47,27 +47,13 @@ export function UtilityDialog({ s, year, selection, onClose, onCopy, onNextYear,
   if (sub === 'backup') return <BackupDialog s={s} onClose={() => setSub(null)} onRestored={() => attempt(async () => onSession(await refreshSession(s)))} />;
   if (sub === 'bin') return <BinDialog ws={s.ws} onClose={() => setSub(null)} />;
   if (sub === 'log') return <LogDialog ws={s.ws} onClose={() => setSub(null)} />;
+  if (sub === 'tabs') return <TabsDialog s={s} onClose={(changed) => (changed ? attempt(async () => onSession(await refreshSession(s))) : setSub(null))} />;
   if (sub === 'recovery')
     return (
       <div class="backdrop full">
         <RecoverySetup ws={s.ws} folder={s.dataLabel} onDone={onClose} onCancel={() => setSub(null)} />
       </div>
     );
-
-  const addTab = async () => {
-    const name = await promptDialog({
-      title: 'Add new bill tab',
-      label: 'Tab name',
-      hint: 'A new tab (bill type) for every client in every year.',
-      validate: (v) => (s.types.some((t) => t.tab.toLowerCase() === v.trim().toLowerCase()) ? 'This tab name already exists.' : null),
-    });
-    if (!name) return;
-    await busy('Adding tab…', async () => {
-      await s.ws.addBillType(name);
-      toast(`Added the tab ${name.trim()}.`, 'ok');
-      onSession(await refreshSession(s));
-    });
-  };
 
   // Someone at an unlocked computer must not be able to make a code of their own.
   const newCode = () =>
@@ -130,7 +116,7 @@ export function UtilityDialog({ s, year, selection, onClose, onCopy, onNextYear,
         </section>
         <section>
           <h3>Setup</h3>
-          {item('Add new tab', 'Add a bill type (like Audit or Tax).', addTab)}
+          {item('Tabs…', 'Add, rename, reorder or hide the bill types (like Audit or Tax).', () => setSub('tabs'))}
           {item('Edit drop-down lists', 'Entries offered when typing bill fields.', () => setSub('dropdowns'))}
           {item('Letterhead', 'Firm name, address and index-sheet title.', () => setSub('letterhead'))}
         </section>
@@ -472,6 +458,80 @@ function LogDialog({ ws, onClose }: { ws: WebBooks; onClose: () => void }) {
     >
       <p class="hint">Problems on every computer using this data, newest last. It is kept encrypted with the rest.</p>
       {text === null ? <p>Loading…</p> : text === '' ? <p>No problems so far.</p> : <pre class="log">{text}</pre>}
+    </Modal>
+  );
+}
+
+// ---------- tabs ----------
+
+function TabsDialog({ s, onClose }: { s: Session; onClose: (changed: boolean) => void }) {
+  const [types, setTypes] = useState(s.types);
+  const [changed, setChanged] = useState(false);
+  const refresh = async () => {
+    setTypes(await s.ws.billTypes());
+    setChanged(true);
+  };
+  const add = () =>
+    attempt(async () => {
+      const name = await promptDialog({
+        title: 'Add new tab',
+        label: 'Tab name',
+        hint: 'A new tab (bill type) for every client in every year.',
+        validate: (v) => (types.some((t) => t.tab.toLowerCase() === v.trim().toLowerCase()) ? 'This tab name already exists.' : null),
+      });
+      if (!name) return;
+      await s.ws.addBillType(name);
+      toast(`Added the tab ${name.trim()}.`, 'ok');
+      await refresh();
+    });
+  const rename = (folder: string, tab: string) =>
+    attempt(async () => {
+      const name = await promptDialog({
+        title: `Rename the tab ${tab}`,
+        label: 'New name',
+        value: tab,
+        hint: 'Only the title changes; its bills and drop-down list stay with it. The desktop version shows the new title too.',
+        validate: (v) => (types.some((t) => t.folder !== folder && t.tab.toLowerCase() === v.trim().toLowerCase()) ? 'This tab name already exists.' : null),
+      });
+      if (!name || name.trim() === tab) return;
+      await s.ws.renameBillType(folder, name);
+      await refresh();
+    });
+  const move = (i: number, d: number) =>
+    attempt(async () => {
+      const order = types.map((t) => t.folder);
+      const j = i + d;
+      if (j < 0 || j >= order.length) return;
+      [order[i], order[j]] = [order[j], order[i]];
+      await s.ws.setBillTypeOrder(order);
+      await refresh();
+    });
+  const hide = (folder: string, hidden: boolean) =>
+    attempt(async () => {
+      await s.ws.setBillTypeHidden(folder, hidden);
+      await refresh();
+    });
+  return (
+    <Modal title="Tabs" onClose={() => onClose(changed)} footer={<button onClick={() => onClose(changed)}>Close</button>}>
+      <p class="hint">The bill types shown for every client. A hidden tab still shows for a client that has bills in it.</p>
+      <ul class="tab-list">
+        {types.map((t, i) => (
+          <li key={t.folder} class={t.hidden ? 'hidden-tab' : ''}>
+            <b>{t.tab}</b>
+            {t.hidden && <span class="hint">hidden</span>}
+            <span class="grow" />
+            <button class="icon-btn" aria-label={`Move ${t.tab} up`} title="Move up" disabled={i === 0} onClick={() => move(i, -1)}>
+              ↑
+            </button>
+            <button class="icon-btn" aria-label={`Move ${t.tab} down`} title="Move down" disabled={i === types.length - 1} onClick={() => move(i, 1)}>
+              ↓
+            </button>
+            <button onClick={() => rename(t.folder, t.tab)}>Rename…</button>
+            <button onClick={() => hide(t.folder, !t.hidden)}>{t.hidden ? 'Show' : 'Hide'}</button>
+          </li>
+        ))}
+      </ul>
+      <button onClick={add}>+ Add new tab…</button>
     </Modal>
   );
 }

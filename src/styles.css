@@ -1513,3 +1513,220 @@ pre.log {
     grid-template-columns: 1fr;
   }
 }
+.forgot {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+}
+.forgot button {
+  width: 100%;
+}
+.find-code p {
+  margin: 0 0 6px;
+}
+
+/* ---------- money, payments, search ---------- */
+
+th.money,
+td.money {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  width: 110px;
+}
+td.money.due,
+b.due {
+  color: var(--margin);
+}
+table.clients tfoot td {
+  font-weight: 600;
+  border-top: 2px solid var(--rule-strong);
+  padding: 4px 8px;
+}
+td.billno.clash {
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+  box-shadow: inset 3px 0 0 #d9a441;
+}
+.icon-btn.wide {
+  width: auto;
+  padding: 0 10px;
+}
+button.small {
+  padding: 2px 8px;
+  font-size: 13px;
+}
+.warn-text {
+  color: var(--warn-ink);
+}
+fieldset.details {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  margin: 10px 0 0;
+  padding: 6px 12px 10px;
+}
+.billno-field p {
+  margin: 4px 0;
+}
+.pay-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--rule);
+  background: var(--paper);
+}
+.pay-list {
+  flex-basis: 100%;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.pay-list li {
+  display: grid;
+  grid-template-columns: 100px 90px 110px 1fr 32px;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  border-top: 1px dashed var(--rule);
+}
+.status {
+  display: inline-block;
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--ledger-soft);
+  color: var(--ledger-dark);
+  white-space: nowrap;
+}
+.status.due {
+  background: #f6dcd8;
+  color: #8a2418;
+}
+.status.part {
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  padding: 12px 16px;
+}
+.tile {
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+}
+.tile span {
+  color: var(--muted);
+  font-size: 13px;
+}
+.tile b {
+  font-size: 22px;
+  font-family: var(--serif);
+  font-variant-numeric: tabular-nums;
+}
+.tile small {
+  color: var(--muted);
+}
+.tile.due b {
+  color: var(--margin);
+}
+table.ledger {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--paper);
+}
+table.ledger th,
+table.ledger td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--rule);
+  text-align: left;
+}
+table.ledger thead th {
+  position: sticky;
+  top: 0;
+  background: var(--ledger-soft);
+  z-index: 1;
+}
+table.ledger th.sorted button {
+  text-decoration: underline;
+  font-weight: 700;
+}
+table.ledger th button.link {
+  color: inherit;
+  font-weight: 600;
+  text-decoration: none;
+}
+table.ledger tfoot td {
+  font-weight: 600;
+  border-top: 2px solid var(--rule-strong);
+}
+.search-hits {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 55vh;
+  overflow: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+.search-hits li {
+  display: grid;
+  grid-template-columns: 60px 1fr;
+  gap: 2px 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--rule);
+  cursor: pointer;
+}
+.search-hits li.hi {
+  background: var(--mark);
+}
+.sh-text {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 13px;
+}
+.keys {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+.keys td {
+  padding: 3px 8px 3px 0;
+}
+kbd {
+  font-family: inherit;
+  font-size: 13px;
+  background: var(--ledger-soft);
+  border: 1px solid var(--rule-strong);
+  border-radius: 3px;
+  padding: 0 5px;
+}
+.tab-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 12px;
+}
+.tab-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--rule);
+}
+.tab-list li.hidden-tab b,
+.tab.hidden-tab {
+  opacity: 0.6;
+  font-style: italic;
+}
+@media (max-width: 720px) {
+  .keys {
+    grid-template-columns: 1fr;
+  }
+}

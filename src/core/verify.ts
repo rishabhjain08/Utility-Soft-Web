@@ -54,6 +54,8 @@ export interface Side {
   lines(year: string, client: string, folder: string, bill: string): Promise<string[] | null>;
   /** Other files kept from a desktop data folder: path -> reader. */
   others(): Promise<Map<string, () => Promise<Uint8Array | null>>>;
+  /** What only the web format has (client details, payments), compared when both sides have it. */
+  webOnly?(year: string, client: string): Promise<{ details: string; payments: string }>;
 }
 
 /** A desktop installation as a side (only read). */
@@ -103,6 +105,17 @@ export function webSide(web: WebBooks): Side {
     bills: async (year, client, folder) => billNamesOf(await rec(year, client), folder),
     lines: async (year, client, folder, bill) => billLinesOf(await rec(year, client), folder, bill),
     others: async () => new Map((await web.settings()).desktop.files.map((f) => [f.path, () => web.readExtra(f)])),
+    webOnly: async (year, client) => {
+      const r = await rec(year, client);
+      const details = r ? JSON.stringify((await web.vault.readJson([`clients`, `${r.id}.dat`]).catch(() => null)) ?? {}) : '{}';
+      const payments = JSON.stringify(
+        (r?.bills ?? [])
+          .filter((b) => b.payments?.length)
+          .map((b) => [b.type, b.name, b.payments!.map((p) => [p.date, p.kind, p.amount, p.note ?? ''])])
+          .sort(),
+      );
+      return { details, payments };
+    },
   };
 }
 
@@ -258,6 +271,11 @@ export async function compare(a: Side, b: Side, opts: { relocated?: string[]; on
       }
       if (x.serial !== y.serial) local(`${at} › S.No.`, showValue(x.serial), showValue(y.serial));
       if (x.billNo !== y.billNo) local(`${at} › Bill No.`, showValue(x.billNo), showValue(y.billNo));
+      if (a.webOnly && b.webOnly) {
+        const [wa, wb] = await Promise.all([a.webOnly(year, name), b.webOnly(year, name)]);
+        if (wa.details !== wb.details) local(`${at} › Client details`, 'one set', 'a different set');
+        if (wa.payments !== wb.payments) local(`${at} › Payments`, 'one list', 'a different list');
+      }
       for (const t of new Set([...x.billTypes, ...y.billTypes])) if (!types.some((k) => k.folder === t)) local(`${at} › ${t}`, '(no such tab)', 'has bills');
       for (const t of types) {
         const xb = await a.bills(year, name, t.folder);

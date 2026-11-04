@@ -58,9 +58,15 @@ export async function login(page: Page, picker: FolderPicker, dir: string, passw
 }
 
 /** Rows of the client list as "serial|name|billno". */
+/** Rows of the client list as "serial|name|billno" (the Billed and Due columns left out). */
 export async function clientRows(page: Page): Promise<string[]> {
   return page.locator('table.clients tbody tr').evaluateAll((trs) =>
-    trs.map((tr) => Array.from(tr.querySelectorAll('td')).map((td) => (td.querySelector('input') as HTMLInputElement | null)?.value ?? td.textContent?.trim()).join('|')),
+    trs.map((tr) =>
+      Array.from(tr.querySelectorAll('td'))
+        .slice(0, 3)
+        .map((td) => (td.querySelector('input') as HTMLInputElement | null)?.value ?? td.textContent?.trim())
+        .join('|'),
+    ),
   );
 }
 
@@ -78,7 +84,8 @@ export async function gridRows(page: Page): Promise<string[]> {
     trs.map((tr) => {
       if (tr.classList.contains('group-head')) return '--sep--';
       const d = (tr.querySelector('.desc-input') as HTMLInputElement).value;
-      const a = (tr.querySelector('.amt-input') as HTMLInputElement).value;
+      // Amounts are shown with Indian commas.
+      const a = (tr.querySelector('.amt-input') as HTMLInputElement).value.replace(/,/g, '');
       return `${d}|${a}`;
     }),
   );

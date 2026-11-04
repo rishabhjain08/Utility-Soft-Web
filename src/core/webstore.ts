@@ -20,13 +20,14 @@ import { sanitize } from './codec';
 import { BillType, DEFAULT_BILL_TYPES, DEFAULT_DROPDOWNS, Letterhead, cleanLetterhead, dropdownItems, mergeDropdowns } from './config';
 import { DamagedError, DataKey, PASSWORD_ITERATIONS, RECOVERY_ITERATIONS, Wrap, b64, newRecoveryCode, normalizeRecoveryCode, unb64 } from './crypto';
 import { FsDir, findEntry, tryRead, writeFile } from './fs';
-import { BillRow, HistoryColumn, SEPARATOR, historyColumns, linesFromRows, mergeHistory, parseBillLine, rowsFromLines } from './bill';
+import { BillRow, HistoryColumn, SEPARATOR, amountValue, historyColumns, linesFromRows, mergeHistory, parseBillLine, rowsFromLines } from './bill';
 import { UserError, checkName, checkTabName } from './names';
 import { SerialEntry, endsWithDigit, planInsert, planRemove, planRename } from './serial';
 import { sameName, sortNames, sortStrings } from './sort';
 import { isYear, nextYear, previousYear, previousYears } from './years';
 import { mapLimit } from './util';
 import { Vault } from './vault';
+import { nextBillNo } from './billno';
 
 export const MANIFEST = 'utility-soft.json';
 export const FORMAT = 'utility-soft';
@@ -34,6 +35,7 @@ export const FORMAT = 'utility-soft';
 export const VERSION = 1;
 const SETTINGS = 'settings.dat';
 const YEARS = 'years';
+const CLIENTS = 'clients';
 const OPEN = 'open';
 const JOURNAL = 'journal';
 const HISTORY = 'history';
@@ -42,7 +44,7 @@ const LOGS = 'logs';
 export const EXTRAS = 'extras';
 export const BACKUPS = 'backups';
 /** What a backup holds: the data itself, not the bookkeeping. */
-export const DATA_ENTRIES = [MANIFEST, SETTINGS, YEARS, EXTRAS];
+export const DATA_ENTRIES = [MANIFEST, SETTINGS, YEARS, CLIENTS, EXTRAS];
 
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
@@ -119,7 +121,33 @@ export interface StoredBill {
   type: string;
   name: string;
   groups: Group[];
+  /** Money received for this bill, and reductions agreed with the client. */
+  payments?: Payment[];
+  /** Date last printed or saved as PDF (dd.mm.yyyy). */
+  printed?: string;
 }
+
+export interface Payment {
+  id: string;
+  /** yyyy-mm-dd */
+  date: string;
+  /** Whole rupees, more than 0. */
+  amount: number;
+  /** Money received, or a reduction of the bill agreed with the client. */
+  kind: 'received' | 'reduced';
+  note?: string;
+}
+
+/** Optional details of a client, the same in every year (kept by its id). */
+export interface ClientDetails {
+  pan?: string;
+  gstin?: string;
+  address?: string;
+  phone?: string;
+  email?: string;
+}
+
+export const DETAIL_FIELDS: (keyof ClientDetails)[] = ['pan', 'gstin', 'address', 'phone', 'email'];
 
 export interface ClientYear {
   v: number;
@@ -134,6 +162,10 @@ export interface Client {
   name: string;
   serial: string;
   billNo: string;
+  /** Total of all its bills this year. */
+  billed?: number;
+  /** What is still to be paid (billed less received and reduced). */
+  due?: number;
 }
 
 export interface Computer {
@@ -156,6 +188,23 @@ export interface Problem {
   /** From its last good version, when there is one. */
   name: string | null;
   restorable: boolean;
+}
+
+export interface LedgerRow {
+  year: string;
+  client: string;
+  serial: string;
+  billNo: string;
+  folder: string;
+  tab: string;
+  bill: string;
+  billed: number;
+  received: number;
+  reduced: number;
+  due: number;
+  /** Date of the last money received (yyyy-mm-dd). */
+  lastPaid?: string;
+  printed?: string;
 }
 
 export type BinEntry =
@@ -274,7 +323,7 @@ function parseRecord(v: unknown, path: string): ClientYear {
     billNo: str(r.billNo),
     bills: arr(r.bills).map((b) => {
       const x = b as Record<string, unknown>;
-      return {
+      const bill: StoredBill = {
         id: str(x.id) || newId(),
         type: str(x.type),
         name: str(x.name),
@@ -286,6 +335,13 @@ function parseRecord(v: unknown, path: string): ClientYear {
           }),
         })),
       };
+      const payments = arr(x.payments)
+        .map((p) => p as Record<string, unknown>)
+        .filter((p) => typeof p.amount === 'number' && (p.kind === 'received' || p.kind === 'reduced'))
+        .map((p) => ({ id: str(p.id) || newId(), date: str(p.date), amount: p.amount as number, kind: p.kind as Payment['kind'], ...(p.note ? { note: str(p.note) } : {}) }));
+      if (payments.length) bill.payments = payments;
+      if (typeof x.printed === 'string' && x.printed) bill.printed = x.printed;
+      return bill;
     }),
   };
 }
@@ -375,6 +431,19 @@ export function encodeRecord(rec: ClientYear): Uint8Array {
   return enc.encode(JSON.stringify({ ...rec, v: VERSION, bills: sortBills(rec.bills) }));
 }
 
+/** A bill's total and what is still to be paid on it. */
+export function billSums(b: StoredBill): { billed: number; received: number; reduced: number; due: number } {
+  let billed = 0;
+  for (const g of b.groups) for (const r of g.rows) billed += amountValue(amountText(r));
+  let received = 0;
+  let reduced = 0;
+  for (const p of b.payments ?? []) {
+    if (p.kind === 'received') received += p.amount;
+    else reduced += p.amount;
+  }
+  return { billed, received, reduced, due: billed - received - reduced };
+}
+
 /** Names of a client's bills of one type, sorted. */
 export function billNamesOf(rec: ClientYear | null, folder: string): string[] {
   return rec ? sortStrings(rec.bills.filter((b) => sameName(b.type, folder)).map((b) => b.name)) : [];
@@ -440,6 +509,21 @@ export class WebBooks {
     this.computer = opts.computer ?? { id: 'this', name: '' };
     this.now = opts.now ?? Date.now;
     this.iterations = opts.iterations ?? PASSWORD_ITERATIONS;
+    // Changes made here run one after another: each reads what the one before wrote
+    // (two quick clicks must not both start from the same old file).
+    const self = this as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    for (const m of CHANGES) {
+      const f = self[m];
+      self[m] = (...a: unknown[]) => this.exclusive(() => f.apply(this, a));
+    }
+  }
+
+  private queue: Promise<unknown> = Promise.resolve();
+
+  private exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(fn, fn);
+    this.queue = run.catch(() => undefined);
+    return run;
   }
 
   /** Opens a store with its password; null when the password is wrong. */
@@ -580,7 +664,7 @@ export class WebBooks {
 
   /** Keeps `before` as an earlier version of `path`, at most every few minutes (always when `force`). */
   private async keepVersion(path: string[], before: Uint8Array, force: boolean): Promise<void> {
-    if (path[0] !== YEARS && path[0] !== SETTINGS) return;
+    if (path[0] !== YEARS && path[0] !== SETTINGS && path[0] !== CLIENTS) return;
     const key = path.join('/');
     const now = this.now();
     let last = this.lastVersion.get(key);
@@ -811,7 +895,10 @@ export class WebBooks {
 
   async clients(year: string): Promise<Client[]> {
     await this.assertYear(year);
-    return (await this.records(year)).map((r) => ({ name: r.name, serial: r.serial, billNo: r.billNo }));
+    return (await this.records(year)).map((r) => {
+      const sum = r.bills.map(billSums).reduce((a, b) => ({ billed: a.billed + b.billed, due: a.due + b.due }), { billed: 0, due: 0 });
+      return { name: r.name, serial: r.serial, billNo: r.billNo, billed: sum.billed, due: sum.due };
+    });
   }
 
   async clientExists(year: string, name: string): Promise<boolean> {
@@ -865,7 +952,8 @@ export class WebBooks {
     return out;
   }
 
-  async addClient(year: string, rawName: string, late: boolean): Promise<Client> {
+  /** `billNo`, when given, is used instead of the one the client had the year before. */
+  async addClient(year: string, rawName: string, late: boolean, billNo?: string): Promise<Client> {
     const name = checkName(rawName).toUpperCase();
     await this.assertYear(year);
     const recs = await this.records(year);
@@ -874,7 +962,7 @@ export class WebBooks {
     const prev = previousYear(year);
     const id = await this.idFor(year, name, prev ? [prev, ...previousYears(prev, 2)] : []);
     const src = prev ? await this.record(prev, id) : null;
-    const rec: ClientYear = { v: VERSION, id, name, serial: plan.serial, billNo: src?.billNo ?? '', bills: prev ? await this.carriedBills(prev, id) : [] };
+    const rec: ClientYear = { v: VERSION, id, name, serial: plan.serial, billNo: billNo !== undefined ? sanitize(billNo.trim()) : (src?.billNo ?? ''), bills: prev ? await this.carriedBills(prev, id) : [] };
     await this.commit([...this.serialChanges(year, recs, plan.updates), this.put(year, rec)], `add ${name}`);
     return { name, serial: rec.serial, billNo: rec.billNo };
   }
@@ -947,7 +1035,8 @@ export class WebBooks {
     if (expected !== undefined && !sameLines(current, expected)) throw new BillConflict(current);
     const groups = groupsFromLines(linesFromRows(rows.map((x) => ({ ...x, amount: cleanAmount(x.amount) })), year));
     const others = r.bills.filter((b) => b !== old);
-    await this.write(year, { ...r, bills: [...others, { id: old?.id ?? newId(), type: old?.type ?? folder, name: old?.name ?? bill, groups }] }, `bill ${bill}`);
+    const kept: StoredBill = old ? { ...old, groups } : { id: newId(), type: folder, name: bill, groups };
+    await this.write(year, { ...r, bills: [...others, kept] }, `bill ${bill}`);
     return linesFromGroups(groups);
   }
 
@@ -1014,6 +1103,118 @@ export class WebBooks {
       out.push({ at: v.at, lines });
     }
     return out;
+  }
+
+  // ---------- payments ----------
+
+  private async updateBill(year: string, client: string, folder: string, bill: string, fn: (b: StoredBill) => StoredBill, label: string): Promise<void> {
+    const r = await this.get(year, client);
+    const b = billOf(r, folder, bill);
+    if (!b) throw new UserError('Bill not found.');
+    await this.write(year, { ...r, bills: r.bills.map((x) => (x === b ? fn(x) : x)) }, label);
+  }
+
+  /** Records money received for a bill, or a reduction agreed with the client. */
+  async addPayment(year: string, client: string, folder: string, bill: string, p: Omit<Payment, 'id'>): Promise<void> {
+    if (!Number.isInteger(p.amount) || p.amount <= 0 || p.amount > INT_MAX) throw new UserError('The amount must be a whole number of rupees, more than 0.');
+    if (!/^\d{4}-\d\d-\d\d$/.test(p.date) || Number.isNaN(Date.parse(p.date))) throw new UserError('Choose the date.');
+    const entry: Payment = { id: newId(), date: p.date, amount: p.amount, kind: p.kind, ...(p.note?.trim() ? { note: sanitize(p.note.trim()) } : {}) };
+    await this.updateBill(year, client, folder, bill, (b) => ({ ...b, payments: [...(b.payments ?? []), entry].sort((x, y) => x.date.localeCompare(y.date)) }), `payment ${bill}`);
+  }
+
+  async removePayment(year: string, client: string, folder: string, bill: string, id: string): Promise<void> {
+    await this.updateBill(year, client, folder, bill, (b) => {
+      const payments = (b.payments ?? []).filter((x) => x.id !== id);
+      const { payments: _, ...rest } = b;
+      return payments.length ? { ...rest, payments } : rest;
+    }, `remove payment ${bill}`);
+  }
+
+  async payments(year: string, client: string, folder: string, bill: string): Promise<{ payments: Payment[]; sums: ReturnType<typeof billSums>; printed?: string } | null> {
+    const b = billOf(await this.find(year, client), folder, bill);
+    return b ? { payments: b.payments ?? [], sums: billSums(b), printed: b.printed } : null;
+  }
+
+  /** Notes the date bills were printed (or saved as PDF). */
+  async markPrinted(year: string, items: { client: string; folder: string; bill: string }[], date: string): Promise<void> {
+    const byClient = new Map<string, { folder: string; bill: string }[]>();
+    for (const i of items) byClient.set(i.client, [...(byClient.get(i.client) ?? []), i]);
+    const changes: Change[] = [];
+    for (const [client, list] of byClient) {
+      const r = await this.find(year, client);
+      if (!r) continue;
+      const bills = r.bills.map((b) => (list.some((i) => billOf(r, i.folder, i.bill) === b) ? { ...b, printed: date } : b));
+      changes.push({ ...this.put(year, { ...r, bills }), routine: true });
+    }
+    if (changes.length) await this.commit(changes, 'printed');
+  }
+
+  /** Every bill of a year with what it was billed and what is due, for the payments page. */
+  async ledger(year: string): Promise<LedgerRow[]> {
+    const types = await this.billTypes();
+    const out: LedgerRow[] = [];
+    for (const r of await this.records(year)) {
+      for (const b of r.bills) {
+        const sums = billSums(b);
+        const last = (b.payments ?? []).filter((p) => p.kind === 'received').map((p) => p.date).sort().pop();
+        out.push({
+          year, client: r.name, serial: r.serial, billNo: r.billNo, folder: b.type, tab: types.find((t) => t.folder === b.type)?.tab ?? b.type,
+          bill: b.name, ...sums, lastPaid: last, printed: b.printed,
+        });
+      }
+    }
+    return out;
+  }
+
+  /** The Bill No. to offer for a new client of a year (see nextBillNo). */
+  async suggestBillNo(year: string): Promise<{ next: number; from: 'this year' | 'the year before' | 'none' }> {
+    const prev = previousYear(year);
+    const before = prev && (await this.years()).includes(prev) ? await this.records(prev) : [];
+    return nextBillNo((await this.records(year)).map((r) => r.billNo), before.map((r) => r.billNo));
+  }
+
+  // ---------- client details ----------
+
+  async clientDetails(year: string, client: string): Promise<ClientDetails> {
+    const r = await this.get(year, client);
+    return (await this.vault.readJson<ClientDetails>([CLIENTS, `${r.id}.dat`]).catch(() => null)) ?? {};
+  }
+
+  /** Saves the optional details (the same in every year of the client). Empty fields are dropped. */
+  async saveClientDetails(year: string, client: string, d: ClientDetails): Promise<void> {
+    const r = await this.get(year, client);
+    const clean: ClientDetails = {};
+    for (const k of DETAIL_FIELDS) {
+      const v = sanitize(d[k] ?? '').trim();
+      if (v) clean[k] = k === 'pan' || k === 'gstin' ? v.toUpperCase() : v;
+    }
+    const empty = Object.keys(clean).length === 0;
+    await this.commit([{ path: [CLIENTS, `${r.id}.dat`], after: empty ? null : enc.encode(JSON.stringify(clean)) }], `details of ${client}`);
+  }
+
+  // ---------- tabs ----------
+
+  async renameBillType(folder: string, rawTab: string): Promise<void> {
+    await this.updateSettings((s) => {
+      const t = s.billTypes.find((x) => x.folder === folder);
+      if (!t) throw new UserError('No such tab.');
+      const name = checkTabName(rawTab, s.billTypes.filter((x) => x !== t));
+      // The drop-down list belongs to the tab by its title.
+      s.dropdowns = s.dropdowns.map((d) => (sameName(d.tab, t.tab) ? { ...d, tab: name } : d));
+      t.tab = name;
+    });
+  }
+
+  async setBillTypeOrder(folders: string[]): Promise<void> {
+    await this.updateSettings((s) => {
+      s.billTypes = [...s.billTypes].sort((a, b) => folders.indexOf(a.folder) - folders.indexOf(b.folder));
+    });
+  }
+
+  async setBillTypeHidden(folder: string, hidden: boolean): Promise<void> {
+    await this.updateSettings((s) => {
+      s.billTypes = s.billTypes.map((t) => (t.folder === folder ? (hidden ? { ...t, hidden: true } : { folder: t.folder, tab: t.tab }) : t));
+    });
   }
 
   // ---------- copying clients between years ----------
@@ -1195,6 +1396,7 @@ export class WebBooks {
       if (y.kind !== 'directory') continue;
       for (const f of await this.vault.list([YEARS, y.name])) if (f.kind === 'file' && f.name.endsWith('.dat')) out.push([YEARS, y.name, f.name]);
     }
+    for (const f of await this.vault.list([CLIENTS])) if (f.kind === 'file') out.push([CLIENTS, f.name]);
     for (const f of await this.vault.list([EXTRAS])) if (f.kind === 'file') out.push([EXTRAS, f.name]);
     return out;
   }
@@ -1221,6 +1423,14 @@ export class WebBooks {
     this.ids.clear();
   }
 }
+
+/** Methods that change the data (serialized per WebBooks; none calls another). */
+const CHANGES = [
+  'setPassword', 'setRecoveryCode', 'saveLetterhead', 'saveDropdowns', 'setBackupPath', 'addBillType', 'renameBillType', 'setBillTypeOrder',
+  'setBillTypeHidden', 'setBillNo', 'addClient', 'deleteClients', 'modifyClient', 'writeBill', 'createBill', 'renameBill',
+  'deleteBill', 'addPayment', 'removePayment', 'markPrinted', 'saveClientDetails', 'copyClients', 'copyClientToNextYear', 'restore',
+  'restoreDamaged', 'replaceData',
+] as const satisfies readonly (keyof WebBooks)[];
 
 function entriesOf(recs: ClientYear[]): SerialEntry[] {
   return recs.map((r) => ({ name: r.name, serial: r.serial }));

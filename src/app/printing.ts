@@ -16,15 +16,15 @@ export async function collectBills(
   year: string,
   clients: Client[],
   only?: { types?: BillType[]; bill?: string },
-): Promise<PrintableBill[]> {
-  const out: PrintableBill[] = [];
+): Promise<(PrintableBill & { client: string; folder: string })[]> {
+  const out: (PrintableBill & { client: string; folder: string })[] = [];
   const types = only?.types ?? s.types;
   for (const c of clients) {
     for (const t of types) {
       const names = only?.bill !== undefined ? [only.bill] : await s.ws.bills(year, c.name, t.folder);
       for (const b of names) {
         const rows = await s.ws.readBill(year, c.name, t.folder, b);
-        out.push({ billName: b, serial: c.serial, billNo: c.billNo, rows });
+        out.push({ billName: b, serial: c.serial, billNo: c.billNo, rows, client: c.name, folder: t.folder });
       }
     }
   }
@@ -38,6 +38,8 @@ export async function printBills(s: Session, year: string, clients: Client[], on
   if (!bills) return;
   if (bills.length === 0) return toast('There are no bills to print.', 'info');
   await printJob({ kind: 'bills', bills, letterhead: s.letterhead, date });
+  // Kept for the payments page ("printed on").
+  await s.ws.markPrinted(year, bills.map((b) => ({ client: b.client, folder: b.folder, bill: b.billName })), date).catch(() => undefined);
 }
 
 export async function printIndex(s: Session, year: string): Promise<void> {

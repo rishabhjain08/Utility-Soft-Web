@@ -2,7 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { BillRow, HistoryColumn, SEPARATOR, billTotal, historyColumns, isValidAmount, rowGroups, rowNumbers, rowsFromLines } from '../core/bill';
 import { BillType } from '../core/config';
 import { groupIndian } from '../core/money';
-import { BillConflict, Client } from '../core/webstore';
+import { BillConflict, Client, ClientDetails, Payment } from '../core/webstore';
+import { collapseYear } from '../core/bill';
+import { dateString } from '../core/util';
+import { billPdf, pdfName } from './pdf';
+import { PaymentStrip } from './payments';
 import { nextYear, previousYears } from '../core/years';
 import { Session } from './session';
 import { printBills } from './printing';
@@ -15,18 +19,27 @@ interface Props {
   onDone: (year: string, name: string) => void;
   /** Moves the open-client lock; false if the user declined to open a locked client. */
   relock: (fromYear: string, toYear: string, name: string) => Promise<boolean>;
+  /** The tab and bill to show first. */
+  at?: { folder?: string; bill?: string };
 }
 
 const blank = (): BillRow => ({ desc: '', amount: '' });
 
-export function Editor({ s, year: initialYear, client, onDone, relock }: Props) {
+export function Editor({ s, year: initialYear, client, onDone, relock, at }: Props) {
   const [year, setYear] = useState(initialYear);
   const [years, setYears] = useState<string[]>([initialYear]);
   const [info, setInfo] = useState<Client>(client);
   const [exists, setExists] = useState(true);
-  const [typeIdx, setTypeIdx] = useState(0);
+  const [typeIdx, setTypeIdx] = useState(Math.max(0, s.types.findIndex((t) => t.folder === at?.folder)));
   const [bills, setBills] = useState<string[]>([]);
-  const [bill, setBill] = useState<string | null>(null);
+  const [bill, setBill] = useState<string | null>(at?.bill ?? null);
+  const [details, setDetails] = useState<ClientDetails>({});
+  useEffect(() => {
+    s.ws.clientDetails(initialYear, client.name).then(setDetails, () => undefined);
+  }, []);
+  // Tabs with bills this year (hidden tabs are shown only then).
+  const [used, setUsed] = useState<Set<string>>(new Set());
+  const [money, setMoney] = useState<{ payments: Payment[]; sums: { billed: number; received: number; reduced: number; due: number }; printed?: string } | null>(null);
   const [rows, setRows] = useState<BillRow[]>([]);
   // The bill whose rows are in `rows`: nothing is editable until the open bill has been read,
   // so typing while it opens cannot overwrite it (or another bill) with the rows on screen.
@@ -167,6 +180,10 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
       if (ex) {
         const c = (await s.ws.clients(year)).find((x) => x.name === info.name);
         if (c) setInfo(c);
+        const u = new Set<string>();
+        for (const t of s.types) if ((await s.ws.bills(year, info.name, t.folder)).length) u.add(t.folder);
+        setUsed(u);
+        if (s.types[typeIdx]?.hidden && !u.has(s.types[typeIdx].folder)) setTypeIdx(Math.max(0, s.types.findIndex((t) => !t.hidden)));
       }
     });
   }, [year]);
@@ -201,6 +218,7 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
       const h = await s.ws.historyLines(year, info.name, type.folder, bill);
       if (!live) return;
       if (pending.current?.key !== key) base.current.set(key, lines);
+      setMoney(await s.ws.payments(year, info.name, type.folder, bill));
       shownKey.current = key;
       undo.current = { past: [], future: [], at: 0 };
       setRows(r);
@@ -462,6 +480,45 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
       }
     });
 
+  const addToList = (desc: string) =>
+    attempt(async () => {
+      if (!type) return;
+      const items = await s.ws.dropdown(type.tab, '##');
+      await s.ws.saveDropdowns(s.types, new Map([[type.tab, [...items, collapseYear(desc.trim(), year)]]]));
+      setSuggest(await s.ws.dropdown(type.tab, year));
+      toast(`Added to the ${type.tab} drop-down list.`, 'ok');
+    });
+
+  /** The open bill as a PDF: saved to Downloads, or shared (Windows share, WhatsApp, email…). */
+  const makePdf = (share: boolean) =>
+    attempt(async () => {
+      if (!type || !bill) return;
+      await flush();
+      const date = dateString(new Date());
+      const { bytes, missing } = await billPdf({ billName: bill, serial: info.serial, billNo: info.billNo, rows: await s.ws.readBill(year, info.name, type.folder, bill) }, s.letterhead, date);
+      const name = pdfName(info.name, bill, info.billNo);
+      const file = new File([bytes as BlobPart], name, { type: 'application/pdf' });
+      if (share && navigator.canShare?.({ files: [file] })) {
+        try {
+          await navigator.share({ files: [file], title: name });
+        } catch (e) {
+          if (e instanceof Error && e.name === 'AbortError') return;
+          throw e;
+        }
+      } else {
+        const url = URL.createObjectURL(file);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 10_000);
+        toast(`Saved ${name} (in Downloads).`, 'ok');
+      }
+      if (missing.length) toast(`Some characters cannot be shown in the PDF and became “?”: ${missing.join(' ')}`, 'info');
+      await s.ws.markPrinted(year, [{ client: info.name, folder: type.folder, bill }], date);
+    });
+  const canShare = typeof navigator !== 'undefined' && typeof navigator.canShare === 'function';
+
   const printTab = () =>
     attempt(async () => {
       if (!type) return;
@@ -564,16 +621,23 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
             aria-label={`Amount row ${i + 1}`}
             data-row={i}
             data-col="amount"
-            value={r.amount}
+            value={withCommas(r.amount)}
             onFocus={() => setFocus({ row: i, col: 'amount' })}
             onInput={(e) => {
               const el = e.target as HTMLInputElement;
               const v = el.value.replace(/[,\s]/g, '');
               if (!/^[+-]?\d*$/.test(v) || !isValidAmount(v === '+' || v === '-' ? '' : v)) {
-                el.value = r.amount;
+                el.value = withCommas(r.amount);
                 return;
               }
+              // Keep the cursor after the same digit once the commas move.
+              const digits = el.value.slice(0, el.selectionStart ?? el.value.length).replace(/[^\d+-]/g, '').length;
               setCell(i, { amount: v });
+              requestAnimationFrame(() => {
+                let at = 0;
+                for (let k = 0; k < digits && at < el.value.length; at++) if (/[\d+-]/.test(el.value[at])) k++;
+                el.setSelectionRange(at, at);
+              });
             }}
             onKeyDown={(e) => gridNav(e, i, 'amount')}
           />
@@ -588,6 +652,7 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
                 { label: 'Insert a row above', run: () => insertAt(i) },
                 { label: 'Insert a row below', run: () => insertAt(i + 1) },
                 { label: 'Start a new group from this row', run: () => insertAt(i, true) },
+                ...(r.desc.trim() && !suggest.includes(r.desc.trim()) ? [{ label: 'Add this text to the drop-down list', run: () => addToList(r.desc) }] : []),
                 picked.has(i) && picked.size > 1
                   ? { label: `Delete the ${picked.size} selected rows`, run: () => deleteRows(), danger: true }
                   : { label: 'Delete this row', run: () => deleteRows([i]), danger: true },
@@ -650,6 +715,8 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
           <b>{info.name}</b>
           <span>
             S.No. {info.serial || '—'} · Bill No. {info.billNo || '—'}
+            {details.pan && ` · PAN ${details.pan}`}
+            {details.gstin && ` · GSTIN ${details.gstin}`}
           </span>
         </div>
         <div class="year-picker">
@@ -678,6 +745,14 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
         <button onClick={printThis} disabled={!bill} title="Print this bill (Ctrl+P)">
           Print
         </button>
+        <button onClick={() => makePdf(false)} disabled={!bill} title="Save this bill as a PDF file (in Downloads), to email or send">
+          PDF
+        </button>
+        {canShare && (
+          <button onClick={() => makePdf(true)} disabled={!bill} title="Send this bill as a PDF (WhatsApp, email…)">
+            Share…
+          </button>
+        )}
         <button onClick={() => setShowUtility(true)} disabled={!exists} title="Bill utility (Alt+U)">
           Bill utility…
         </button>
@@ -693,11 +768,20 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
       ) : (
         <>
           <div class="tabs types" role="tablist" aria-label="Bill types">
-            {s.types.map((t, i) => (
-              <button key={t.folder} role="tab" aria-selected={i === typeIdx} class={i === typeIdx ? 'tab active' : 'tab'} onClick={() => switchTo(() => setTypeIdx(i))}>
-                {t.tab}
-              </button>
-            ))}
+            {s.types.map((t, i) =>
+              t.hidden && !used.has(t.folder) && i !== typeIdx ? null : (
+                <button
+                  key={t.folder}
+                  role="tab"
+                  aria-selected={i === typeIdx}
+                  class={`${i === typeIdx ? 'tab active' : 'tab'} ${t.hidden ? 'hidden-tab' : ''}`}
+                  title={t.hidden ? 'A hidden tab, shown because this client has bills in it' : undefined}
+                  onClick={() => switchTo(() => setTypeIdx(i))}
+                >
+                  {t.tab}
+                </button>
+              ),
+            )}
           </div>
           <div class="tabs bills" role="tablist" aria-label="Bills">
             {bills.map((b) => (
@@ -791,6 +875,18 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
                   </tfoot>
                 </table>
               </div>
+              {money && (
+                <PaymentStrip
+                  s={s}
+                  year={year}
+                  client={info.name}
+                  folder={type!.folder}
+                  bill={bill}
+                  billed={total}
+                  payments={money.payments}
+                  onChanged={() => attempt(async () => setMoney(await s.ws.payments(year, info.name, type!.folder, bill)))}
+                />
+              )}
             </>
           )}
         </>
@@ -1071,4 +1167,9 @@ function RowMenu({ label, open, onOpen, items }: { label: string; open: boolean;
       )}
     </div>
   );
+}
+
+/** An amount as shown while typing: whole numbers with Indian commas (25,000; 1,25,000). */
+function withCommas(a: string): string {
+  return /^-?\d+$/.test(a) && String(Number(a)) === a ? groupIndian(Number(a)) : a;
 }
