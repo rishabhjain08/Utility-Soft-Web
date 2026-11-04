@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { BillRow, HistoryColumn, SEPARATOR, billTotal, historyColumns, isValidAmount, rowGroups, rowNumbers } from '../core/bill';
+import { BillRow, HistoryColumn, SEPARATOR, billTotal, historyColumns, isValidAmount, rowGroups, rowNumbers, rowsFromLines } from '../core/bill';
 import { BillType } from '../core/config';
 import { groupIndian } from '../core/money';
-import { Client } from '../core/workspace';
+import { BillConflict, Client } from '../core/webstore';
 import { nextYear, previousYears } from '../core/years';
 import { Session } from './session';
 import { printBills } from './printing';
-import { Modal, attempt, busy, confirmDialog, promptDialog, toast } from './ui';
+import { Modal, attempt, busy, confirmDialog, mountDialog, promptDialog, toast } from './ui';
 
 interface Props {
   s: Session;
@@ -44,6 +44,38 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
   const timer = useRef<number | undefined>(undefined);
   const chain = useRef<Promise<unknown>>(Promise.resolve());
   const keyOf = (y: string, t: BillType | undefined, b: string | null) => (t && b ? JSON.stringify([y, info.name, t.folder, b]) : '');
+  // Each bill as it was last read or saved here: a save refuses if it was changed elsewhere since.
+  const base = useRef(new Map<string, string[] | null>());
+  const shownKey = useRef('');
+
+  /** The bill was changed on another computer while open here: keep which version? */
+  const resolveConflict = async (key: string, rows: BillRow[], current: string[] | null): Promise<void> => {
+    const [y, name, folder, b] = JSON.parse(key) as string[];
+    const mine = await confirmDialog({
+      title: 'Changed on another computer',
+      message: (
+        <>
+          <p>
+            The bill <b>{b}</b> was {current ? 'changed' : 'deleted'} on another computer while it was open here.
+          </p>
+          <p class="hint">Keep the version on this screen (the other one is kept as an earlier version), or show the other one.</p>
+        </>
+      ),
+      ok: 'Keep mine',
+      cancel: current ? 'Show the other version' : 'Leave it deleted',
+    });
+    if (mine) {
+      base.current.set(key, await s.ws.writeBill(y, name, folder, b, rows, current));
+      return;
+    }
+    base.current.set(key, current);
+    if (pending.current?.key === key) pending.current = null;
+    if (shownKey.current === key) {
+      const r = rowsFromLines(current ?? [], y);
+      setRows(r);
+      undo.current = { past: [], future: [], at: 0 };
+    }
+  };
 
   const flush = (): Promise<unknown> => {
     window.clearTimeout(timer.current);
@@ -53,7 +85,14 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
       const [y, name, folder, b] = JSON.parse(p.key) as string[];
       setSaveState('saving');
       chain.current = chain.current
-        .then(() => s.ws.writeBill(y, name, folder, b, p.rows))
+        .then(async () => {
+          try {
+            base.current.set(p.key, await s.ws.writeBill(y, name, folder, b, p.rows, base.current.get(p.key)));
+          } catch (e) {
+            if (e instanceof BillConflict) await resolveConflict(p.key, p.rows, e.current);
+            else throw e;
+          }
+        })
         .then(() => setSaveState(pending.current ? 'saving' : 'saved'))
         .catch((e) => {
           console.error(e);
@@ -64,13 +103,42 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
     return chain.current;
   };
 
-  const update = (next: BillRow[]) => {
-    if (!ready) return;
+  // Undo and redo of changes to the open bill (typing in one cell counts as one change).
+  const undo = useRef<{ past: BillRow[][]; future: BillRow[][]; at: number; cell?: string }>({ past: [], future: [], at: 0 });
+  const [, setUndoTick] = useState(0);
+
+  const save = (next: BillRow[]) => {
     setRows(next);
     pending.current = { key: keyOf(year, type, bill), rows: next };
     setSaveState('saving');
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(flush, 600);
+  };
+
+  const update = (next: BillRow[], cell?: string) => {
+    if (!ready) return;
+    const u = undo.current;
+    const now = Date.now();
+    if (!(cell && u.cell === cell && now - u.at < 1500 && u.past.length)) u.past.push(rows);
+    if (u.past.length > 200) u.past.shift();
+    u.future = [];
+    u.at = now;
+    u.cell = cell;
+    setUndoTick((t) => t + 1);
+    save(next);
+  };
+
+  const undoRedo = (back: boolean) => {
+    if (!ready) return;
+    const u = undo.current;
+    const from = back ? u.past : u.future;
+    const to = back ? u.future : u.past;
+    const r = from.pop();
+    if (!r) return;
+    to.push(rows);
+    u.cell = undefined;
+    setUndoTick((t) => t + 1);
+    save(r);
   };
 
   useEffect(() => {
@@ -127,11 +195,16 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
     }
     let live = true;
     attempt(async () => {
-      const r = await s.ws.readBill(year, info.name, type.folder, bill);
+      const key = keyOf(year, type, bill);
+      const lines = await s.ws.readBillLines(year, info.name, type.folder, bill);
+      const r = rowsFromLines(lines ?? [], year);
       const h = await s.ws.historyLines(year, info.name, type.folder, bill);
       if (!live) return;
+      if (pending.current?.key !== key) base.current.set(key, lines);
+      shownKey.current = key;
+      undo.current = { past: [], future: [], at: 0 };
       setRows(r);
-      setLoadedKey(keyOf(year, type, bill));
+      setLoadedKey(key);
       setHistory(h);
       setFocus({ row: 0, col: 'desc' });
     });
@@ -180,7 +253,7 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
     const next = [...rows];
     while (next.length <= i) next.push(blank());
     next[i] = { ...next[i], ...patch };
-    update(next);
+    update(next, `${i}:${Object.keys(patch).join()}`);
   };
 
   const insertAt = (at: number, sep = false) => {
@@ -352,6 +425,43 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
       await printBills(s, year, [info], { types: [type], bill });
     });
 
+  const showVersions = () =>
+    attempt(async () => {
+      if (!type || !bill) return;
+      await flush();
+      const versions = await s.ws.billVersions(year, info.name, type.folder, bill);
+      const chosen = await mountDialog<string[] | null>((done) => (
+        <Modal title={`Earlier versions — ${bill}`} wide onClose={() => done(null)} footer={<button onClick={() => done(null)}>Close</button>}>
+          {versions.length === 0 ? (
+            <p>There are no earlier versions of this bill yet. A version is kept at most every 10 minutes while a bill is being changed.</p>
+          ) : (
+            <ul class="version-list">
+              {versions.map((v) => {
+                const r = rowsFromLines(v.lines, year);
+                return (
+                  <li key={v.at}>
+                    <div>
+                      <b>{new Date(v.at).toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</b>
+                      <span class="hint">
+                        {' '}
+                        · {r.filter((x) => x.desc !== SEPARATOR).length} rows · total {groupIndian(billTotal(r))}/-
+                      </span>
+                      <div class="hint">{r.filter((x) => x.desc !== SEPARATOR).slice(0, 3).map((x) => x.desc).join(' · ')}</div>
+                    </div>
+                    <button onClick={() => done(v.lines)}>Use this version</button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </Modal>
+      ));
+      if (chosen) {
+        update(rowsFromLines(chosen, year));
+        toast('The earlier version is back. Ctrl+Z undoes this.', 'ok');
+      }
+    });
+
   const printTab = () =>
     attempt(async () => {
       if (!type) return;
@@ -372,7 +482,10 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
     if (document.querySelector('.backdrop')) return;
     const k = e.key;
     const ctrl = e.ctrlKey || e.metaKey;
-    if (ctrl && k.toLowerCase() === 'p') {
+    if (ctrl && (k.toLowerCase() === 'z' || k.toLowerCase() === 'y')) {
+      e.preventDefault();
+      undoRedo(k.toLowerCase() === 'z' && !e.shiftKey);
+    } else if (ctrl && k.toLowerCase() === 'p') {
       e.preventDefault();
       printThis();
     } else if (ctrl && k.toLowerCase() === 'i') {
@@ -446,6 +559,7 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
         <td class="amt">
           <input
             class={`amt-input ${isValidAmount(r.amount) ? '' : 'invalid'}`}
+            title={isValidAmount(r.amount) ? undefined : 'Not a whole number, so it is not counted in the total. Type the amount again to correct it.'}
             inputMode="numeric"
             aria-label={`Amount row ${i + 1}`}
             data-row={i}
@@ -609,6 +723,12 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
                 <button onClick={addGroup} title="Start a new group of rows with its own subtotal, e.g. for another person on this bill (Ctrl+B starts one at the current row)">
                   + Add group
                 </button>
+                <button class="icon-btn" aria-label="Undo" title="Undo (Ctrl+Z)" disabled={!undo.current.past.length} onClick={() => undoRedo(true)}>
+                  ↶
+                </button>
+                <button class="icon-btn" aria-label="Redo" title="Redo (Ctrl+Y)" disabled={!undo.current.future.length} onClick={() => undoRedo(false)}>
+                  ↷
+                </button>
                 <span class="hint grow">
                   Drag <Grip /> to reorder rows, click a row number to select it (Ctrl or Shift for more), ⋯ for more. Ctrl+Space shows the drop-down list.
                 </span>
@@ -686,6 +806,10 @@ export function Editor({ s, year: initialYear, client, onDone, relock }: Props) 
             <button class="util-item" disabled={!bill} onClick={deleteBill}>
               <b>Delete the bill</b>
               <span>{bill ?? 'No bill selected'}</span>
+            </button>
+            <button class="util-item" disabled={!bill} onClick={() => (setShowUtility(false), showVersions())}>
+              <b>Earlier versions of the bill…</b>
+              <span>Go back to how {bill ?? 'the bill'} was earlier (kept every 10 minutes of work).</span>
             </button>
             <button class="util-item" disabled={!bills.length} onClick={printTab}>
               <b>Print the bills</b>

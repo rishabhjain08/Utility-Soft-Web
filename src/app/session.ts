@@ -1,43 +1,25 @@
-import {
-  BillType, FILES, Letterhead, isRelativePath, pathParts, readDataPath, readPassword, writePassword,
-} from '../core/config';
-import { FsDir, ensureDir, exists, findEntry, walk, writeFile } from '../core/fs';
-import { BILLS, LOCKS, Workspace } from '../core/workspace';
-import { WebBooks, isWebStore } from '../core/webstore';
+import { BillType, FILES, Letterhead, isRelativePath, pathParts, readDataPath, readPassword } from '../core/config';
+import { FsDir, exists, walk } from '../core/fs';
+import { Computer, WebBooks, isWebStore } from '../core/webstore';
+import { dailyBackup } from '../core/backup';
+import { kvGet, kvSet } from './kv';
 import { rememberedPath } from './folders';
 
-/** The bills: in the desktop (Java) layout or in the web format. */
-export type Books = Workspace | WebBooks;
-
 export interface Session {
-  /** The folder opened: the desktop program folder, or the web data folder. */
-  program: FsDir;
-  ws: Books;
-  /** Where the data is, for display (Java's "Data Loaded From"). */
+  /** The data folder. */
+  root: FsDir;
+  ws: WebBooks;
+  /** The folder's name, for display. */
   dataLabel: string;
   types: BillType[];
   letterhead: Letterhead | null;
-  /** The password typed to open it (needed to export for the desktop version, which stores it). */
+  /** The password typed to open it (an export for the desktop version stores it in pass.txt). */
   password: string;
-}
-
-/** Anything with a password: a desktop program folder or a web data folder. */
-export interface PasswordStore {
-  checkPassword(password: string): Promise<boolean>;
-  setPassword(password: string): Promise<void>;
-}
-
-/** A folder that was opened, before the password is entered. */
-export type Place = { kind: 'desktop'; dir: FsDir } | { kind: 'web'; dir: FsDir };
-
-export function passwordStore(place: Place): PasswordStore {
-  if (place.kind === 'web') return new WebBooks(place.dir);
-  return { checkPassword: (p) => checkPassword(place.dir, p), setPassword: (p) => writePassword(place.dir, p) };
 }
 
 export type FolderKind = 'program' | 'web' | 'new' | 'not-program';
 
-/** Is this a web data folder, the Java program folder, an empty folder or something else? */
+/** Is this a web data folder, a desktop (Java) program folder, an empty folder or something else? */
 export async function inspectProgram(dir: FsDir): Promise<{ kind: FolderKind; hasPassword: boolean }> {
   if (await isWebStore(dir)) return { kind: 'web', hasPassword: true };
   const hasPassword = await exists(dir, FILES.pass, 'file');
@@ -48,57 +30,47 @@ export async function inspectProgram(dir: FsDir): Promise<{ kind: FolderKind; ha
   return { kind: 'not-program', hasPassword: false };
 }
 
-
-/** Makes sure a data folder has bills/ and activelocation.txt. */
-export async function prepareDataFolder(dir: FsDir): Promise<void> {
-  await ensureDir(dir, BILLS);
-  if (!(await findEntry(dir, LOCKS, 'file'))) await writeFile(dir, LOCKS, new Uint8Array());
-}
-
-export async function checkPassword(program: FsDir, password: string): Promise<boolean> {
+/** The desktop version's own password check (before its folder is copied). */
+export async function checkDesktopPassword(program: FsDir, password: string): Promise<boolean> {
   return (await readPassword(program)) === password;
 }
 
-export type DataResolution =
-  | { ok: true; data: FsDir; label: string }
-  | { ok: false; path: string; reason: 'missing-relative' | 'needs-folder' };
+// ---------- this computer ----------
 
-/** Finds the data folder named by loaddatafrom.txt. */
-export async function resolveData(program: FsDir): Promise<DataResolution> {
-  const path = await readDataPath(program);
-  if (path === '') {
-    const data = await ensureDir(program, 'data');
-    await prepareDataFolder(data);
-    return { ok: true, data, label: `${program.name}\\data` };
-  }
-  if (isRelativePath(path)) {
-    const data = await walk(program, pathParts(path));
-    if (!data) return { ok: false, path, reason: 'missing-relative' };
-    await prepareDataFolder(data);
-    return { ok: true, data, label: `${program.name}\\${pathParts(path).join('\\')}` };
-  }
-  const remembered = await rememberedPath('data', path);
-  if (remembered) {
-    await prepareDataFolder(remembered);
-    return { ok: true, data: remembered, label: path };
-  }
-  return { ok: false, path, reason: 'needs-folder' };
+/** This browser's identity, shown to other computers when it has a client open. */
+export async function thisComputer(): Promise<Computer> {
+  const c = await kvGet<Computer>('computer');
+  if (c?.id) return c;
+  const fresh: Computer = { id: Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => b.toString(16).padStart(2, '0')).join(''), name: '' };
+  await kvSet('computer', fresh);
+  return fresh;
 }
 
-/** A folder looks like a data folder if it has bills/ (or is empty). */
-export async function looksLikeData(dir: FsDir): Promise<boolean> {
-  if (await exists(dir, BILLS, 'directory')) return true;
-  return (await dir.list()).length === 0;
+export async function nameThisComputer(name: string): Promise<Computer> {
+  const c = { ...(await thisComputer()), name: name.trim() };
+  await kvSet('computer', c);
+  return c;
 }
 
-export async function openSession(program: FsDir, data: FsDir, label: string, password: string): Promise<Session> {
-  const ws = new Workspace(program, data);
-  await ws.repairBillTypes();
-  return refreshSession({ program, ws, dataLabel: label, types: [], letterhead: null, password });
+// ---------- opening ----------
+
+/**
+ * A session on unlocked data: finishes changes a computer was making when it
+ * stopped, and makes today's automatic backup in the background.
+ */
+export async function openWebSession(ws: WebBooks, password: string): Promise<Session> {
+  const r = await ws.open();
+  if (r.skipped) await ws.log(`${r.skipped} interrupted changes were not finished: the files had changed since.`);
+  dailyBackup(ws).catch((e) => ws.log(`Automatic backup failed: ${e instanceof Error ? e.message : e}`));
+  return refreshSession({ root: ws.root, ws, dataLabel: ws.root.name, types: [], letterhead: null, password });
 }
 
-export async function openWebSession(dir: FsDir, password: string): Promise<Session> {
-  return refreshSession({ program: dir, ws: new WebBooks(dir), dataLabel: dir.name, types: [], letterhead: null, password });
+export async function unlock(dir: FsDir, password: string): Promise<WebBooks | null> {
+  return WebBooks.unlock(dir, password, { computer: await thisComputer() });
+}
+
+export async function unlockWithRecovery(dir: FsDir, code: string): Promise<WebBooks | null> {
+  return WebBooks.unlockWithRecovery(dir, code, { computer: await thisComputer() });
 }
 
 export async function refreshSession(s: Session): Promise<Session> {

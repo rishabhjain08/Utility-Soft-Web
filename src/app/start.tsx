@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'preact/hooks';
 import { FsaDir } from '../core/fsa';
 import { FsDir } from '../core/fs';
-import { Letterhead, writeDataPath, writePassword } from '../core/config';
-import { createStore } from '../core/webstore';
-import { ensurePermission, pickFolder, rememberPath, rememberProgram, rememberedProgram, relativeTo, supportsFolders } from './folders';
-import { PasswordStore, Place, inspectProgram, looksLikeData, passwordStore, prepareDataFolder } from './session';
+import { Letterhead } from '../core/config';
+import { collapseYear, expandYear } from '../core/bill';
+import { financialYearOf } from '../core/years';
+import { WebBooks, createStore } from '../core/webstore';
+import { ensurePermission, pickFolder, rememberProgram, rememberedProgram, supportsFolders } from './folders';
+import { checkDesktopPassword, inspectProgram, thisComputer, unlock } from './session';
 import { attempt, busy, confirmDialog, toast } from './ui';
 import { chooseNewFolder } from './migrate';
 import { LetterheadPart, LetterheadPreview, SAMPLE } from './letterhead-preview';
@@ -132,7 +134,7 @@ export function Welcome({ onOpened }: { onOpened: (dir: FsDir, kind: OpenedKind,
         <p class="hint">
           To use your existing bills, open the folder with your Utility Soft data, or the desktop program folder (the one with{' '}
           <code>billing.jar</code>, <code>pass.txt</code> and <code>impinfo.txt</code>). To start from nothing, choose where to keep the new
-          files. Your files stay on this computer.
+          files. Your files stay on this computer, encrypted with your password.
         </p>
         {message && <p class="warn">{message}</p>}
       </div>
@@ -142,29 +144,43 @@ export function Welcome({ onOpened }: { onOpened: (dir: FsDir, kind: OpenedKind,
 
 // ---------- Login ----------
 
-export function Login({ place, onLogin, onBack }: { place: Place; onLogin: (password: string) => void; onBack: () => void }) {
+/** A folder that was opened, before the password is entered. */
+export type Place = { kind: 'desktop' | 'web'; dir: FsDir };
+
+/** The password of a web data folder (opens it), or of a desktop folder (before copying it). */
+export function Login({
+  place, message, onLogin, onRecovery, onBack,
+}: {
+  place: Place;
+  message?: string;
+  onLogin: (ws: WebBooks | null, password: string) => void;
+  onRecovery: () => void;
+  onBack: () => void;
+}) {
   const [pw, setPw] = useState('');
   const [error, setError] = useState(false);
-  const [changing, setChanging] = useState(false);
 
   const submit = (e: Event) => {
     e.preventDefault();
     attempt(async () => {
-      if (await passwordStore(place).checkPassword(pw)) onLogin(pw);
-      else {
+      const ok = await busy('Opening…', async () => {
+        if (place.kind === 'desktop') return (await checkDesktopPassword(place.dir, pw)) ? null : false;
+        return (await unlock(place.dir, pw)) ?? false;
+      });
+      if (ok === undefined) return;
+      if (ok === false) {
         setError(true);
         setPw('');
-      }
+      } else onLogin(ok, pw);
     });
   };
-
-  if (changing) return <ChangePassword store={passwordStore(place)} onDone={() => setChanging(false)} />;
 
   return (
     <div class="start">
       <form class="card" onSubmit={submit}>
         <h1>Utility Soft</h1>
         <p class="lead">{place.dir.name}</p>
+        {message && <p class="notice">{message}</p>}
         <label class="field">
           <span>Password</span>
           <input type="password" autoFocus value={pw} onInput={(e) => (setPw((e.target as HTMLInputElement).value), setError(false))} />
@@ -174,9 +190,12 @@ export function Login({ place, onLogin, onBack }: { place: Place; onLogin: (pass
           <button type="button" onClick={onBack}>
             Back
           </button>
-          <button type="button" onClick={() => setChanging(true)}>
-            Change password
-          </button>
+          {place.kind === 'web' && (
+            <button type="button" class="link" onClick={onRecovery}>
+              Forgot the password?
+            </button>
+          )}
+          <span class="grow" />
           <button class="primary" type="submit">
             OK
           </button>
@@ -186,54 +205,11 @@ export function Login({ place, onLogin, onBack }: { place: Place; onLogin: (pass
   );
 }
 
-export function ChangePassword({ store, onDone }: { store: PasswordStore; onDone: () => void }) {
-  const [old, setOld] = useState('');
-  const [a, setA] = useState('');
-  const [b, setB] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const submit = (e: Event) => {
-    e.preventDefault();
-    attempt(async () => {
-      if (!(await store.checkPassword(old))) return setError('The old password is wrong.');
-      if (a === '') return setError('The new password cannot be empty.');
-      if (a !== b) return setError('The two new passwords do not match.');
-      await store.setPassword(a);
-      toast('Password changed.', 'ok');
-      onDone();
-    });
-  };
-  return (
-    <div class="start">
-      <form class="card" onSubmit={submit}>
-        <h1>Change password</h1>
-        <label class="field">
-          <span>Old password</span>
-          <input type="password" autoFocus value={old} onInput={(e) => setOld((e.target as HTMLInputElement).value)} />
-        </label>
-        <label class="field">
-          <span>New password</span>
-          <input type="password" value={a} onInput={(e) => setA((e.target as HTMLInputElement).value)} />
-        </label>
-        <label class="field">
-          <span>New password again</span>
-          <input type="password" value={b} onInput={(e) => setB((e.target as HTMLInputElement).value)} />
-        </label>
-        {error && <p class="warn">{error}</p>}
-        <div class="row">
-          <button type="button" onClick={onDone}>
-            Cancel
-          </button>
-          <button class="primary" type="submit">
-            Change
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-/** First run: a new installation (in the web format), or a desktop folder without pass.txt. */
-export function SetPassword({ program, isNew, onDone, onBack }: { program: FsDir; isNew: boolean; onDone: (password: string) => void; onBack: () => void }) {
+/**
+ * Choosing a password: for a new installation (which is then created), or for
+ * the copy of a desktop folder that has none (nothing is written to that folder).
+ */
+export function SetPassword({ program, isNew, onDone, onBack }: { program: FsDir; isNew: boolean; onDone: (ws: WebBooks | null, password: string) => void; onBack: () => void }) {
   const [a, setA] = useState('');
   const [b, setB] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -241,17 +217,21 @@ export function SetPassword({ program, isNew, onDone, onBack }: { program: FsDir
     e.preventDefault();
     if (a === '') return setError('Choose a password.');
     if (a !== b) return setError('The two passwords do not match.');
+    if (!isNew) return onDone(null, a);
     busy('Setting up…', async () => {
-      if (isNew) await createStore(program, a);
-      else await writePassword(program, a);
-      onDone(a);
+      const { books } = await createStore(program, a);
+      onDone(books.as({ computer: await thisComputer() }), a);
     });
   };
   return (
     <div class="start">
       <form class="card" onSubmit={submit}>
-        <h1>{isNew ? 'New Utility Soft' : 'Set a password'}</h1>
-        <p class="lead">{isNew ? 'Choose the password used to open Utility Soft.' : 'This folder has no password file (pass.txt). Choose a password.'}</p>
+        <h1>{isNew ? 'New Utility Soft' : 'Choose a password'}</h1>
+        <p class="lead">
+          {isNew
+            ? 'Choose the password used to open Utility Soft. Everything is encrypted with it.'
+            : 'This desktop folder has no password (pass.txt). Choose one for the copy in the new format.'}
+        </p>
         <label class="field">
           <span>Password</span>
           <input type="password" autoFocus value={a} onInput={(e) => setA((e.target as HTMLInputElement).value)} />
@@ -277,9 +257,11 @@ export function SetPassword({ program, isNew, onDone, onBack }: { program: FsDir
 // ---------- Letterhead (Java "Registration") ----------
 
 export function LetterheadForm({
-  save: store, initial, onDone, onSkip, embedded,
+  save: store, initial, year, onDone, onSkip, embedded,
 }: {
   save: (lh: Letterhead) => Promise<void>;
+  /** The year the index title is shown and typed for (it is stored for every year). */
+  year?: string | null;
   initial: Letterhead | null;
   onDone: () => void;
   onSkip?: () => void;
@@ -287,7 +269,9 @@ export function LetterheadForm({
 }) {
   const [name, setName] = useState((initial?.firmName ?? []).join('\n'));
   const [address, setAddress] = useState((initial?.firmAddress ?? []).join('\n'));
-  const [titles, setTitles] = useState<string[]>([...(initial?.indexTitles ?? ['', '', ''])]);
+  const y = year ?? financialYearOf(new Date());
+  const [titles, setTitles] = useState<string[]>((initial?.indexTitles ?? ['', '', '']).map((t) => expandYear(t, y)));
+  const stored = (): [string, string, string] => [collapseYear(titles[0], y), collapseYear(titles[1], y), collapseYear(titles[2], y)];
   // Blank lines inside a block are kept (they space the printout); trailing ones are dropped.
   const lines = (s: string) => {
     const out = s.split('\n').map((l) => l.trimEnd());
@@ -298,7 +282,7 @@ export function LetterheadForm({
   const save = (e: Event) => {
     e.preventDefault();
     attempt(async () => {
-      await store({ firmName: lines(name), firmAddress: lines(address), indexTitles: [titles[0], titles[1], titles[2]] });
+      await store({ firmName: lines(name), firmAddress: lines(address), indexTitles: stored() });
       toast('Letterhead saved.', 'ok');
       onDone();
     });
@@ -335,12 +319,13 @@ export function LetterheadForm({
             />
           </label>
           <fieldset>
-            <legend>Index sheet title (up to 3 lines; ## is replaced by the year)</legend>
+            <legend>Index sheet title (up to 3 lines)</legend>
+            <p class="hint">Write the year as it is for {y}; each year's index sheet shows its own year.</p>
             {[0, 1, 2].map((i) => (
               <input
                 key={i}
                 aria-label={`Index sheet title line ${i + 1}`}
-                placeholder={SAMPLE.titles[i] ? `e.g. ${SAMPLE.titles[i]}` : `Line ${i + 1}`}
+                placeholder={SAMPLE.titles[i] ? `e.g. ${SAMPLE.titles[i].split('##').join(y)}` : `Line ${i + 1}`}
                 value={titles[i]}
                 {...track('titles')}
                 onInput={(e) => {
@@ -353,7 +338,8 @@ export function LetterheadForm({
           </fieldset>
         </div>
         <LetterheadPreview
-          letterhead={{ firmName: lines(name), firmAddress: lines(address), indexTitles: [titles[0], titles[1], titles[2]] }}
+          letterhead={{ firmName: lines(name), firmAddress: lines(address), indexTitles: stored() }}
+          year={y}
           focus={focus}
         />
       </div>
@@ -370,71 +356,6 @@ export function LetterheadForm({
     </form>
   );
   return embedded ? body : <div class="start">{body}</div>;
-}
-
-// ---------- Data folder ----------
-
-export function DataFolder({
-  program, path, reason, onChosen, onBack,
-}: {
-  program: FsDir;
-  path: string;
-  reason: 'missing-relative' | 'needs-folder';
-  onChosen: (data: FsDir, label: string) => void;
-  onBack: () => void;
-}) {
-  const [message, setMessage] = useState<string | null>(null);
-  const choose = () =>
-    attempt(async () => {
-      const dir = await pickFolder('utility-soft-data', program);
-      if (!dir) return;
-      if (!(await looksLikeData(dir))) {
-        const ok = await confirmDialog({
-          title: 'No bills in this folder',
-          message: (
-            <p>
-              The folder <b>{dir.name}</b> has no <code>bills</code> folder. Use it anyway and start with no bills there?
-            </p>
-          ),
-          ok: 'Use this folder',
-        });
-        if (!ok) return;
-      }
-      await prepareDataFolder(dir);
-      const rel = await relativeTo(program, dir);
-      if (rel !== null) {
-        // Inside the program folder: store a relative path Java understands too.
-        await writeDataPath(program, rel === 'data' ? '' : rel);
-        onChosen(dir, `${program.name}\\${rel}`);
-      } else {
-        await rememberPath('data', path, dir);
-        onChosen(dir, path);
-      }
-    });
-  return (
-    <div class="start">
-      <div class="card">
-        <h1>Where is your data?</h1>
-        {reason === 'needs-folder' ? (
-          <p>
-            Your bills are kept in <b class="path">{path}</b>. The browser needs you to select that folder once.
-          </p>
-        ) : (
-          <p>
-            The data folder <b class="path">{path}</b> was not found inside {program.name}. Select the data folder.
-          </p>
-        )}
-        <p class="hint">Select the folder that contains the “bills” folder.</p>
-        {message && <p class="warn">{message}</p>}
-        <div class="row">
-          <button onClick={onBack}>Back</button>
-          <button class="primary" onClick={() => (setMessage(null), choose())}>
-            Select folder…
-          </button>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 export function Closed({ onReopen }: { onReopen: () => void }) {

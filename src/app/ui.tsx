@@ -1,6 +1,6 @@
 import { ComponentChildren, render } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { UserError } from '../core/workspace';
+import { UserError } from '../core/names';
 
 // ---------- toasts ----------
 
@@ -45,6 +45,13 @@ export function errorText(e: unknown): string {
   return 'Something went wrong.';
 }
 
+let errorLog: ((message: string) => void) | null = null;
+
+/** Where unexpected errors are recorded (the open data's problem log), or null. */
+export function setErrorLog(fn: ((message: string) => void) | null) {
+  errorLog = fn;
+}
+
 /** Runs an action, showing a toast for errors. Returns undefined on error. */
 export async function attempt<T>(fn: () => Promise<T>): Promise<T | undefined> {
   try {
@@ -52,6 +59,7 @@ export async function attempt<T>(fn: () => Promise<T>): Promise<T | undefined> {
   } catch (e) {
     console.error(e);
     toast(errorText(e), 'error');
+    if (!(e instanceof UserError)) errorLog?.(`${errorText(e)}${e instanceof Error && e.stack ? ` | ${e.stack.split('\n').slice(1, 3).join(' ')}` : ''}`);
     return undefined;
   }
 }

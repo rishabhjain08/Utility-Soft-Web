@@ -1,11 +1,11 @@
 // Uses Chrome's real FileSystemDirectoryHandle implementation (backed by the
 // origin-private file system) instead of the disk-backed test picker, and checks
-// that the chosen folder is remembered across reloads.
+// that the chosen folders are remembered across reloads.
 import { test, expect, Page } from '@playwright/test';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { FIXTURES, expectClients, gridRows, waitSaved } from './helpers';
-import { decodeCipherLines, decodeCipherValue } from '../src/core/codec';
+import { FIXTURES, expectClients, gridRows, saveRecoveryCode, waitSaved } from './helpers';
+import { decodeCipherLines } from '../src/core/codec';
 
 function treeOf(root: string): { path: string; b64: string }[] {
   const out: { path: string; b64: string }[] = [];
@@ -69,46 +69,28 @@ async function setup(page: Page, picks: string[]) {
   }, { files: treeOf(join(FIXTURES, 'java-sample')), picks });
 }
 
-test('works with real browser folder handles and remembers the folder', async ({ page }) => {
-  await setup(page, ['prog']);
+/** All file names and bytes under an origin-private folder, as text. */
+async function opfsText(page: Page, folder: string): Promise<string> {
+  return page.evaluate(async (folder) => {
+    const parts: string[] = [];
+    const walk = async (d: FileSystemDirectoryHandle) => {
+      for await (const [name, h] of (d as unknown as { entries(): AsyncIterable<[string, FileSystemHandle]> }).entries()) {
+        parts.push(name);
+        if (h.kind === 'directory') await walk(h as FileSystemDirectoryHandle);
+        else {
+          const u8 = new Uint8Array(await (await (h as FileSystemFileHandle).getFile()).arrayBuffer());
+          let s = '';
+          for (const b of u8) s += String.fromCharCode(b);
+          parts.push(s);
+        }
+      }
+    };
+    await walk(await (await navigator.storage.getDirectory()).getDirectoryHandle(folder));
+    return parts.join('\n');
+  }, folder);
+}
 
-  await page.getByRole('button', { name: /Open Utility Soft folder/ }).click();
-  await page.getByLabel('Password').fill('puja');
-  await page.getByRole('button', { name: 'OK' }).click();
-  await page.getByRole('button', { name: 'Keep using the desktop files' }).click();
-  await expectClients(page, ['1|PREM|', '2|RISHABH|']);
-
-  await page.getByRole('button', { name: 'Add new' }).click();
-  await page.getByLabel('Name').fill('mohan');
-  await page.getByRole('button', { name: 'Add', exact: true }).click();
-  await expectClients(page, ['1|MOHAN|', '2|PREM|', '3|RISHABH|']);
-
-  await page.getByRole('cell', { name: 'RISHABH' }).dblclick();
-  const amt = page.locator('.grid [data-row="0"][data-col="amount"]');
-  await amt.fill('35');
-  await waitSaved(page);
-  await page.getByRole('button', { name: 'Bill utility…' }).click();
-  await page.getByRole('button', { name: /Rename the bill/ }).click();
-  await page.getByLabel('New name').fill('prem chand ji');
-  await page.getByRole('button', { name: 'OK' }).click();
-  await expect(page.getByRole('tab', { name: 'PREM CHAND JI' })).toBeVisible();
-  await page.getByRole('button', { name: '← Done' }).click();
-
-  expect(decodeCipherLines(await readOpfs(page, 'data/bills/06-07/RISHABH/Audit/PREM CHAND JI.txt'))).toEqual(['pooja,35']);
-  expect(decodeCipherValue(await readOpfs(page, 'data/bills/06-07/RISHABH/serialno.txt'))).toBe('3');
-
-  // After a reload the folder is offered again.
-  await page.reload();
-  await page.getByRole('button', { name: 'Continue with “prog”' }).click();
-  await page.getByLabel('Password').fill('puja');
-  await page.getByRole('button', { name: 'OK' }).click();
-  await page.getByRole('button', { name: 'Keep using the desktop files' }).click();
-  await expectClients(page, ['1|MOHAN|', '2|PREM|', '3|RISHABH|']);
-  await page.getByRole('cell', { name: 'RISHABH' }).dblclick();
-  await expect.poll(() => gridRows(page)).toEqual(['pooja|35']);
-});
-
-test('moves to the web format with real folder handles, and remembers the copy', async ({ page }) => {
+test('moves to the web format with real folder handles, works on it and remembers it', async ({ page }) => {
   await setup(page, ['prog', 'copy']);
   await page.getByRole('button', { name: /Open Utility Soft folder/ }).click();
   await page.getByLabel('Password').fill('puja');
@@ -117,24 +99,27 @@ test('moves to the web format with real folder handles, and remembers the copy',
   const report = page.getByRole('dialog', { name: 'Copy made and checked' });
   await expect(report.locator('.report-ok')).toContainText('Everything matches: 1 year, 2 clients and 1 bill (1 row)');
   await report.getByRole('button', { name: 'Open the copy' }).click();
+  await saveRecoveryCode(page);
   await expectClients(page, ['1|PREM|', '2|RISHABH|']);
   await expect(page.locator('.statusbar')).toContainText('Data: copy');
-  await expect(page.locator('.format-badge')).toHaveCount(0);
 
+  await page.getByRole('button', { name: 'Add new' }).click();
+  await page.getByLabel('Name').fill('mohan');
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
+  await expectClients(page, ['1|MOHAN|', '2|PREM|', '3|RISHABH|']);
   await page.getByRole('cell', { name: 'RISHABH' }).dblclick();
   await page.locator('.grid [data-row="0"][data-col="amount"]').fill('35');
   await waitSaved(page);
+  await page.getByRole('button', { name: 'Bill utility…' }).click();
+  await page.getByRole('button', { name: /Rename the bill/ }).click();
+  await page.getByLabel('New name').fill('prem chand ji');
+  await page.getByRole('button', { name: 'OK' }).click();
+  await expect(page.getByRole('tab', { name: 'PREM CHAND JI' })).toBeVisible();
   await page.getByRole('button', { name: '← Done' }).click();
-  const files = await page.evaluate(async () => {
-    const d = await (await (await navigator.storage.getDirectory()).getDirectoryHandle('copy')).getDirectoryHandle('years');
-    const y = await d.getDirectoryHandle('06-07');
-    const out: string[] = [];
-    for await (const [name] of (y as unknown as { entries(): AsyncIterable<[string]> }).entries()) out.push(name);
-    return out;
-  });
-  const recs = await Promise.all(files.map(async (f) => JSON.parse(new TextDecoder().decode(await readOpfs(page, `years/06-07/${f}`, 'copy')))));
-  expect(recs.find((r) => r.name === 'RISHABH').bills[0].groups[0].rows).toEqual([{ text: 'pooja', amount: '35' }]);
-  // The desktop folder still has the old amount.
+
+  // Encrypted on disk; the desktop folder still has the old amount.
+  const disk = await opfsText(page, 'copy');
+  for (const secret of ['RISHABH', 'MOHAN', 'pooja', 'PREM CHAND']) expect(disk).not.toContain(secret);
   expect(decodeCipherLines(await readOpfs(page, 'data/bills/06-07/RISHABH/Audit/PREM CHAND.txt'))).toEqual(['pooja,20']);
 
   // Next time the copy is offered first.
@@ -142,7 +127,11 @@ test('moves to the web format with real folder handles, and remembers the copy',
   await page.getByRole('button', { name: 'Continue with “copy”' }).click();
   await page.getByLabel('Password').fill('puja');
   await page.getByRole('button', { name: 'OK' }).click();
-  await expectClients(page, ['1|PREM|', '2|RISHABH|']);
+  await expectClients(page, ['1|MOHAN|', '2|PREM|', '3|RISHABH|']);
+  await page.getByRole('cell', { name: 'RISHABH' }).dblclick();
+  await expect(page.getByRole('tab', { name: 'PREM CHAND JI' })).toHaveAttribute('aria-selected', 'true');
+  await expect.poll(() => gridRows(page)).toEqual(['pooja|35']);
+  await page.getByRole('button', { name: '← Done' }).click();
 
   // Opening the desktop folder again says it was copied, and opens the copy.
   await page.reload();
@@ -152,6 +141,5 @@ test('moves to the web format with real folder handles, and remembers the copy',
   await page.getByRole('button', { name: 'OK' }).click();
   await expect(page.locator('.notice')).toContainText('This folder was already copied to copy');
   await page.getByRole('button', { name: 'Open “copy”' }).click();
-  await expectClients(page, ['1|PREM|', '2|RISHABH|']);
-  await expect(page.locator('.statusbar')).toContainText('Data: copy');
+  await expectClients(page, ['1|MOHAN|', '2|PREM|', '3|RISHABH|']);
 });

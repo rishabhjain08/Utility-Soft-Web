@@ -3,7 +3,9 @@ import { test, expect } from '@playwright/test';
 import { mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
-import { cipherLines, expectClients, login, programCopy, start } from './helpers';
+import { cipherLines, expectClients, login, migrateTo, programCopy, saveRecoveryCode, start } from './helpers';
+import { WebBooks } from '../src/core/webstore';
+import { NodeDir } from '../tests/nodefs';
 import { encodeCipherLines, encodeCipherValue, encodePlain, encodePlainLines } from '../src/core/codec';
 
 /** Every file and folder with its bytes and modified time. */
@@ -27,7 +29,7 @@ test('move to the new format: refuses a place inside, warns about open clients, 
   writeFileSync(join(dir, 'data/bills/06-07/PREM/notes.txt'), 'kept as it is');
   const before = snapshot(dir);
   const picker = await start(page);
-  await login(page, picker, dir, 'puja', false);
+  await login(page, picker, dir);
   await expect(page.getByText('is in the desktop (Java) version\'s format')).toBeVisible();
 
   // Inside the desktop folder: refused before anything is created.
@@ -49,20 +51,24 @@ test('move to the new format: refuses a place inside, warns about open clients, 
   await page.getByRole('button', { name: 'Create' }).click();
   const report = page.getByRole('dialog', { name: 'Copy made and checked' });
   await expect(report.locator('.report-ok')).toHaveText(/Everything matches: 1 year, 2 clients and 1 bill \(1 row\)/);
-  await expect(report.locator('.report-notes')).toContainText('1 other file in the data folder (not bills) is kept exactly as it was.');
+  await expect(report.locator('.report-notes')).toContainText('1 other file from the desktop data folder (not bills) is kept exactly as it was.');
+  await expect(report).toContainText('is not encrypted: anyone using this computer can read it');
   await report.getByRole('button', { name: 'Open the copy' }).click();
+  // The recovery code must be saved before going on.
+  await saveRecoveryCode(page);
   await expectClients(page, ['1|PREM|', '2|RISHABH|']);
   await expect(page.locator('.statusbar')).toContainText('Data: Utility Soft Data');
 
   expect(snapshot(dir)).toEqual(before);
-  expect(readdirSync(join(place, 'Utility Soft Data')).sort()).toEqual(['desktop-extras', 'utility-soft.json', 'years']);
-  expect(readFileSync(join(place, 'Utility Soft Data/desktop-extras/bills/06-07/PREM/notes.txt'), 'utf8')).toBe('kept as it is');
+  const copy = join(place, 'Utility Soft Data');
+  expect(readdirSync(copy).sort()).toEqual(['backups', 'extras', 'history', 'settings.dat', 'utility-soft.json', 'years']);
+  const ws = (await WebBooks.unlock(new NodeDir(copy), 'puja'))!;
+  const [kept] = (await ws.settings()).desktop.files;
+  expect(kept.path).toBe('bills/06-07/PREM/notes.txt');
+  expect(new TextDecoder().decode((await ws.readExtra(kept))!)).toBe('kept as it is');
 
-  // Utility in the web format: no desktop-only items; export and compare instead.
-  await page.getByRole('button', { name: 'Utility…' }).click();
+  await page.getByRole('button', { name: 'Utility…', exact: true }).click();
   const util = page.getByRole('dialog', { name: 'Utility' });
-  await expect(util.getByRole('button', { name: /Data location/ })).toHaveCount(0);
-  await expect(util.getByRole('button', { name: /Check bills for the desktop version/ })).toHaveCount(0);
   await expect(util.getByRole('button', { name: /Export for the desktop version/ })).toBeVisible();
   await expect(util.getByRole('button', { name: /Compare with a desktop folder/ })).toBeVisible();
 
@@ -80,7 +86,7 @@ test('move to the new format: refuses a place inside, warns about open clients, 
   await cmp.locator('.modal-foot button').click();
 });
 
-test('a desktop folder whose data is kept elsewhere, moved from the Utility menu', async ({ page }) => {
+test('a desktop folder whose data is kept elsewhere', async ({ page }) => {
   const dir = programCopy();
   const elsewhere = mkdtempSync(join(tmpdir(), 'usw-data-'));
   // The data folder is somewhere else (Utility ▸ Data location in the Java version).
@@ -90,23 +96,36 @@ test('a desktop folder whose data is kept elsewhere, moved from the Utility menu
   writeFileSync(join(dir, 'loaddatafrom.txt'), encodePlain('D:\\Office\\Data\r\n1'));
   const picker = await start(page);
   await login(page, picker, dir);
-  picker.next(elsewhere);
-  await page.getByRole('button', { name: 'Select folder…' }).click();
-  await expectClients(page, ['1|PREM|', '2|RISHABH|']);
-  await expect(page.locator('.format-badge')).toContainText('desktop format');
-
-  await page.getByRole('button', { name: 'Utility…' }).click();
-  await page.getByRole('button', { name: /Move to the new format/ }).click();
-  // The browser does not remember folders in these tests, so it asks for the data folder again.
   const dest = mkdtempSync(join(tmpdir(), 'usw-copy-'));
   picker.next(elsewhere);
   picker.next(dest);
+  await page.getByRole('button', { name: 'Make a copy in the new format…' }).click();
+  await expect(page.getByRole('dialog', { name: 'Where is the data?' })).toContainText('D:\\Office\\Data');
   await page.getByRole('button', { name: 'Select folder…' }).click();
   const report = page.getByRole('dialog', { name: 'Copy made and checked' });
   await expect(report.locator('.report-ok')).toBeVisible();
   await report.getByRole('button', { name: 'Open the copy' }).click();
+  await saveRecoveryCode(page);
   await expectClients(page, ['1|PREM|', '2|RISHABH|']);
-  await expect(page.locator('.format-badge')).toHaveCount(0);
-  expect(JSON.parse(readFileSync(join(dest, 'utility-soft.json'), 'utf8')).migratedFrom.data).toBe('D:\\Office\\Data');
+  const ws = (await WebBooks.unlock(new NodeDir(dest), 'puja'))!;
+  expect((await ws.settings()).migratedFrom?.data).toBe('D:\\Office\\Data');
   expect(cipherLines(join(elsewhere, 'bills/06-07/RISHABH/Audit/PREM CHAND.txt'))).toEqual(['pooja,20']);
+});
+
+test('a desktop folder without a password: one is chosen for the copy, the folder stays as it is', async ({ page }) => {
+  const dir = programCopy();
+  const { rmSync } = await import('node:fs');
+  rmSync(join(dir, 'pass.txt'));
+  const before = snapshot(dir);
+  const picker = await start(page);
+  picker.next(dir);
+  await page.getByRole('button', { name: /Open Utility Soft folder/ }).click();
+  await expect(page.getByRole('heading', { name: 'Choose a password' })).toBeVisible();
+  await page.getByLabel('Password', { exact: true }).fill('newpw');
+  await page.getByLabel('Password again').fill('newpw');
+  await page.getByRole('button', { name: 'Continue' }).click();
+  const dest = mkdtempSync(join(tmpdir(), 'usw-copy-'));
+  await migrateTo(page, picker, dest);
+  expect(snapshot(dir)).toEqual(before);
+  expect(await WebBooks.unlock(new NodeDir(dest), 'newpw')).not.toBe(null);
 });

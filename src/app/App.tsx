@@ -1,150 +1,159 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { FsDir } from '../core/fs';
-import { Letterhead, readImpinfo, needsLetterhead, writeLetterhead } from '../core/config';
 import { FsaDir } from '../core/fsa';
-import { WebBooks } from '../core/webstore';
-import { Client } from '../core/workspace';
-import { Place, Session, openSession, openWebSession, resolveData } from './session';
-import { Closed, DataFolder, LetterheadForm, Login, SetPassword, Welcome } from './start';
+import { Client, LockInfo, WebBooks } from '../core/webstore';
+import { Session, openWebSession } from './session';
+import { Closed, LetterheadForm, Login, Place, SetPassword, Welcome } from './start';
 import { DesktopChoice, openCopy } from './migrate';
+import { RecoveryLogin, RecoverySetup } from './recovery';
 import { Main } from './main';
 import { Editor, confirmNextYearCopy } from './editor';
 import { autoBackup } from './utility';
 import { loadPrefs } from './folders';
-import { BusyOverlay, Toasts, attempt, confirmDialog, toast } from './ui';
+import { BusyOverlay, Toasts, attempt, confirmDialog, setErrorLog, toast } from './ui';
 
-/**
- * Quietly fixes bills that the desktop (Java) version could not open — it can
- * write such data itself at any time. See protectForJava in core/bill.ts.
- */
-function checkForDesktop(s: Session) {
-  if (s.ws.kind !== 'desktop') return;
-  s.ws
-    .protectAll(undefined, { skipOpen: true })
-    .then((r) => {
-      if (r.fixed) toast(`Prepared ${r.fixed} bill${r.fixed === 1 ? '' : 's'} so the desktop version can open ${r.fixed === 1 ? 'it' : 'them'}.`, 'info');
-    })
-    .catch((e) => console.warn('Desktop check skipped:', e));
-}
+/** Locks the data after this long without use (the computer is shared). */
+const IDLE_LOCK = 15 * 60_000;
+/** How often an open client is marked as still open (see LOCK_STALE). */
+const HEARTBEAT = 60_000;
 
 type Stage =
   | { kind: 'welcome' }
-  | { kind: 'login'; place: Place }
+  | { kind: 'login'; place: Place; message?: string }
+  | { kind: 'recovery-login'; dir: FsDir }
   | { kind: 'set-password'; program: FsDir; isNew: boolean }
   | { kind: 'desktop-choice'; program: FsDir; password: string }
-  | { kind: 'letterhead'; save: (lh: Letterhead) => Promise<void>; next: () => Promise<void> }
-  | { kind: 'data'; program: FsDir; path: string; reason: 'missing-relative' | 'needs-folder'; password: string }
+  | { kind: 'recovery-setup'; s: Session }
+  | { kind: 'letterhead'; s: Session }
   | { kind: 'main'; s: Session }
   | { kind: 'editor'; s: Session; year: string; client: Client }
   | { kind: 'closed' };
+
+/** "is open on Office PC since 10:32" */
+export function openWhere(l: LockInfo): string {
+  const since = new Date(l.since).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (l.mine) return `is open in another window of this browser (since ${since})`;
+  return `is open on ${l.computer.name || 'another computer'} (since ${since})`;
+}
 
 export function App() {
   const [stage, setStage] = useState<Stage>({ kind: 'welcome' });
   const [year, setYear] = useState<string | null>(null);
   const [focusName, setFocusName] = useState<string | null>(null);
 
-  // The client currently locked in activelocation.txt by this tab.
+  // The client this tab has open (marked in the data folder's open/).
   const held = useRef<{ s: Session; year: string; name: string } | null>(null);
+  // Marking and releasing it happen one after another, so a late "still open" cannot follow a release.
+  const marks = useRef<Promise<unknown>>(Promise.resolve());
+  const mark = (fn: () => Promise<unknown>) => (marks.current = marks.current.then(fn, fn));
 
-  // Release the lock if the tab is closed while a client is open.
+  // Release it if the tab is closed while a client is open.
   useEffect(() => {
     const release = () => {
       const h = held.current;
       if (h) h.s.ws.unlock(h.year, h.name).catch(() => undefined);
     };
     window.addEventListener('pagehide', release);
-    return () => window.removeEventListener('pagehide', release);
+    const beat = window.setInterval(() => {
+      const h = held.current;
+      if (h) mark(() => h.s.ws.heartbeat(h.year, h.name).catch(() => undefined));
+    }, HEARTBEAT);
+    return () => {
+      window.removeEventListener('pagehide', release);
+      window.clearInterval(beat);
+    };
   }, []);
 
-  const afterLogin = (place: Place, password: string) =>
+  const session = stage.kind === 'main' || stage.kind === 'editor' ? stage.s : null;
+  useEffect(() => setErrorLog(session ? (m) => session.ws.log(m) : null), [session?.ws]);
+
+  // Lock after a while without use: back to the password.
+  useEffect(() => {
+    if (!session) return;
+    let timer = 0;
+    const reset = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        const h = held.current;
+        held.current = null;
+        if (h) mark(() => h.s.ws.unlock(h.year, h.name).catch(() => undefined));
+        setStage({ kind: 'login', place: { kind: 'web', dir: session.root }, message: 'Locked after 15 minutes without use. Enter the password to go on.' });
+      }, IDLE_LOCK);
+    };
+    const events = ['keydown', 'pointerdown', 'wheel'] as const;
+    events.forEach((e) => window.addEventListener(e, reset, { passive: true }));
+    reset();
+    return () => {
+      window.clearTimeout(timer);
+      events.forEach((e) => window.removeEventListener(e, reset));
+    };
+  }, [session?.ws]);
+
+  /** After the data is opened: the recovery code must be saved, then the letterhead filled in. */
+  const proceed = (s: Session) =>
     attempt(async () => {
-      if (place.kind === 'desktop') {
-        setStage({ kind: 'desktop-choice', program: place.dir, password });
-        return;
-      }
-      const web = new WebBooks(place.dir);
-      const open = async () => setStage({ kind: 'main', s: await openWebSession(place.dir, password) });
-      if ((await web.letterhead()) === null) {
-        setStage({ kind: 'letterhead', save: (lh) => web.saveLetterhead(lh), next: open });
-        return;
-      }
-      await open();
+      if (!(await s.ws.recoverySaved())) setStage({ kind: 'recovery-setup', s });
+      else if (!s.letterhead) setStage({ kind: 'letterhead', s });
+      else setStage({ kind: 'main', s });
     });
 
-  /** Working on the desktop files themselves. */
-  const keepDesktop = (program: FsDir, password: string) =>
-    attempt(async () => {
-      if (needsLetterhead(await readImpinfo(program))) {
-        setStage({ kind: 'letterhead', save: (lh) => writeLetterhead(program, lh), next: () => connectData(program, password) });
-        return;
-      }
-      await connectData(program, password);
-    });
+  const opened = (ws: WebBooks, password: string) => attempt(async () => proceed(await openWebSession(ws, password)));
 
-  const connectData = async (program: FsDir, password: string) => {
-    const r = await resolveData(program);
-    if (!r.ok) {
-      setStage({ kind: 'data', program, path: r.path, reason: r.reason, password });
-      return;
-    }
-    const s = await openSession(program, r.data, r.label, password);
-    setStage({ kind: 'main', s });
-    checkForDesktop(s);
+  const afterLogin = (place: Place, ws: WebBooks | null, password: string) => {
+    if (place.kind === 'desktop' || !ws) setStage({ kind: 'desktop-choice', program: place.dir, password });
+    else opened(ws, password);
   };
 
   /** A web copy made earlier: opens it with the same password, or asks for its own. */
   const openWebCopy = (dir: FsaDir, password: string) =>
     attempt(async () => {
       const s = await openCopy(dir, password);
-      setStage(s ? { kind: 'main', s } : { kind: 'login', place: { kind: 'web', dir } });
+      if (s) proceed(s);
+      else setStage({ kind: 'login', place: { kind: 'web', dir } });
+    });
+
+  const confirmOpen = async (name: string, y: string, l: LockInfo) =>
+    confirmDialog({
+      title: 'Already open',
+      message: (
+        <>
+          <p>
+            <b>{name}</b> ({y}) {openWhere(l)}.
+          </p>
+          <p class="hint">
+            If nobody is working on it there (for example Utility Soft was closed without pressing Done), you can open it anyway. If both save the same bill,
+            the second one is asked which version to keep.
+          </p>
+        </>
+      ),
+      ok: 'Open anyway',
+      cancel: 'Cancel',
     });
 
   const openClient = (s: Session, y: string, client: Client) =>
     attempt(async () => {
-      if (await s.ws.isLocked(y, client.name)) {
-        const ok = await confirmDialog({
-          title: 'Already open',
-          message: (
-            <>
-              <p>
-                <b>{client.name}</b> ({y}) is open on another computer.
-              </p>
-              <p class="hint">If nobody else is working on it (for example Utility Soft was closed without pressing Done), you can open it anyway.</p>
-            </>
-          ),
-          ok: 'Open anyway',
-          cancel: 'Cancel',
-        });
-        if (!ok) return;
-      }
-      await s.ws.lock(y, client.name);
+      const l = await s.ws.lockInfo(y, client.name);
+      if (l && !(await confirmOpen(client.name, y, l))) return;
+      await mark(() => s.ws.lock(y, client.name));
       held.current = { s, year: y, name: client.name };
       setStage({ kind: 'editor', s, year: y, client });
     });
 
   const relock = async (s: Session, from: string, to: string, name: string) => {
-    if (await s.ws.isLocked(to, name)) {
-      const ok = await confirmDialog({
-        title: 'Already open',
-        message: (
-          <p>
-            <b>{name}</b> ({to}) is open on another computer. Open it anyway?
-          </p>
-        ),
-        ok: 'Open anyway',
-      });
-      if (!ok) return false;
-    }
-    await s.ws.unlock(from, name);
-    await s.ws.lock(to, name);
+    const l = await s.ws.lockInfo(to, name);
+    if (l && !(await confirmOpen(name, to, l))) return false;
+    await mark(async () => {
+      await s.ws.unlock(from, name);
+      await s.ws.lock(to, name);
+    });
     held.current = { s, year: to, name };
     return true;
   };
 
   const closeEditor = (s: Session, y: string, name: string) =>
     attempt(async () => {
-      await s.ws.unlock(y, name);
       held.current = null;
+      await mark(() => s.ws.unlock(y, name));
       await confirmNextYearCopy(s, y, name);
       setYear(y);
       setFocusName(name);
@@ -187,45 +196,44 @@ export function App() {
           program={stage.program}
           isNew={stage.isNew}
           onBack={() => setStage({ kind: 'welcome' })}
-          onDone={(pw) => afterLogin({ kind: stage.isNew ? 'web' : 'desktop', dir: stage.program }, pw)}
+          onDone={(ws, pw) => (ws ? opened(ws, pw) : setStage({ kind: 'desktop-choice', program: stage.program, password: pw }))}
         />
       );
       break;
     case 'login':
-      body = <Login place={stage.place} onLogin={(pw) => afterLogin(stage.place, pw)} onBack={() => setStage({ kind: 'welcome' })} />;
+      body = (
+        <Login
+          place={stage.place}
+          message={stage.message}
+          onLogin={(ws, pw) => afterLogin(stage.place, ws, pw)}
+          onRecovery={() => setStage({ kind: 'recovery-login', dir: stage.place.dir })}
+          onBack={() => setStage({ kind: 'welcome' })}
+        />
+      );
+      break;
+    case 'recovery-login':
+      body = <RecoveryLogin dir={stage.dir} onOpened={opened} onBack={() => setStage({ kind: 'login', place: { kind: 'web', dir: stage.dir } })} />;
       break;
     case 'desktop-choice':
       body = (
         <DesktopChoice
           program={stage.program}
           password={stage.password}
-          onMigrated={(s) => setStage({ kind: 'main', s })}
-          onKeep={() => keepDesktop(stage.program, stage.password)}
+          onMigrated={proceed}
           onOpenCopy={(dir) => openWebCopy(dir, stage.password)}
           onBack={() => setStage({ kind: 'welcome' })}
         />
       );
       break;
-    case 'letterhead':
-      body = <LetterheadForm save={stage.save} initial={null} onDone={() => attempt(stage.next)} onSkip={() => attempt(stage.next)} />;
+    case 'recovery-setup':
+      body = <RecoverySetup ws={stage.s.ws} folder={stage.s.dataLabel} onDone={() => proceed(stage.s)} />;
       break;
-    case 'data':
-      body = (
-        <DataFolder
-          program={stage.program}
-          path={stage.path}
-          reason={stage.reason}
-          onBack={() => setStage({ kind: 'welcome' })}
-          onChosen={(data, label) =>
-            attempt(async () => {
-              const s = await openSession(stage.program, data, label, stage.password);
-              setStage({ kind: 'main', s });
-              checkForDesktop(s);
-            })
-          }
-        />
-      );
+    case 'letterhead': {
+      const s = stage.s;
+      const next = async () => setStage({ kind: 'main', s: { ...s, letterhead: await s.ws.letterhead() } });
+      body = <LetterheadForm save={(lh) => s.ws.saveLetterhead(lh)} initial={null} onDone={() => attempt(next)} onSkip={() => attempt(next)} />;
       break;
+    }
     case 'main':
       body = (
         <Main

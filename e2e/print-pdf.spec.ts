@@ -3,7 +3,7 @@
 import { test, expect, Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { expectClients, login, printed, programCopy, start } from './helpers';
+import { dataCopy, expectClients, login, printed, start } from './helpers';
 import { encodeCipherLines } from '../src/core/codec';
 
 /** Puts the last printout back into the print root and renders it with Chrome's print engine. */
@@ -25,23 +25,24 @@ async function printToPdf(page: Page, file: string): Promise<number> {
 
 test('bills and index print on A4 pages', async ({ page }) => {
   const picker = await start(page);
-  const dir = programCopy();
-  mkdirSync(join(dir, 'data/bills/06-07/PREM/Tax'), { recursive: true });
-  writeFileSync(join(dir, 'impinfo.txt'), encodeCipherLines([
-    '(Audit^Audit)(Vat^Vat)(Tax^Tax)(Others^Others)',
-    '~For JAIN & ASSOCIATES%~Chartered Accountants%~%~(Proprietor)%',
-    '~12, Gandhi Road%~New Delhi - 110001%~Ph: 2345678%',
-    '%$INDEX OF BILLS FOR THE YEAR ##%$JAIN & ASSOCIATES%$%$',
-  ]));
-  writeFileSync(join(dir, 'data/bills/06-07/RISHABH/Audit/PREM CHAND.txt'), encodeCipherLines([
-    'SHRI PREM CHAND,', 'Fee for Tax Audit for the Assessment Year ##,15000', 'Expenses,1250', 'New Name,New', 'SMT. POOJA,',
-    'Fee for IT Return for the Assessment Year ## including computation of income from house property and capital gains,3500', 'Expenses,-200',
-  ]));
-  // A long bill that needs its own page per copy.
-  writeFileSync(join(dir, 'data/bills/06-07/PREM/Tax/LONG.txt'), encodeCipherLines(
-    Array.from({ length: 30 }, (_, i) => `Item number ${i + 1} for the Assessment Year ##,${(i + 1) * 100}`),
-  ));
-  await login(page, picker, dir);
+  const data = await dataCopy((dir) => {
+    mkdirSync(join(dir, 'data/bills/06-07/PREM/Tax'), { recursive: true });
+    writeFileSync(join(dir, 'impinfo.txt'), encodeCipherLines([
+      '(Audit^Audit)(Vat^Vat)(Tax^Tax)(Others^Others)',
+      '~For JAIN & ASSOCIATES%~Chartered Accountants%~%~(Proprietor)%',
+      '~12, Gandhi Road%~New Delhi - 110001%~Ph: 2345678%',
+      '%$INDEX OF BILLS FOR THE YEAR ##%$JAIN & ASSOCIATES%$%$',
+    ]));
+    writeFileSync(join(dir, 'data/bills/06-07/RISHABH/Audit/PREM CHAND.txt'), encodeCipherLines([
+      'SHRI PREM CHAND,', 'Fee for Tax Audit for the Assessment Year ##,15000', 'Expenses,1250', 'New Name,New', 'SMT. POOJA,',
+      'Fee for IT Return for the Assessment Year ## including computation of income from house property and capital gains,3500', 'Expenses,-200',
+    ]));
+    // A long bill that needs its own page per copy.
+    writeFileSync(join(dir, 'data/bills/06-07/PREM/Tax/LONG.txt'), encodeCipherLines(
+      Array.from({ length: 30 }, (_, i) => `Item number ${i + 1} for the Assessment Year ##,${(i + 1) * 100}`),
+    ));
+  });
+  await login(page, picker, data.dir);
   await expectClients(page, ['1|PREM|', '2|RISHABH|']);
   await page.locator('.table-wrap').focus();
   await page.keyboard.press('Control+a');

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { Client } from '../core/workspace';
+import { Client, Problem } from '../core/webstore';
 import { financialYearOf, nextYear } from '../core/years';
 import { Session } from './session';
 import { AddClientDialog, CopyYearsDialog, DeleteClientsDialog, ModifyClientDialog } from './dialogs';
@@ -34,6 +34,7 @@ export function Main({ s, year, setYear, onOpen, onExit, onSession, focusName }:
   const [dialog, setDialog] = useState<Dialog>(null);
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
+  const [problems, setProblems] = useState<Problem[]>([]);
   const tableRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<Dialog>(null);
@@ -54,6 +55,8 @@ export function Main({ s, year, setYear, onOpen, onExit, onSession, focusName }:
     }
     const list = await s.ws.clients(year);
     setClients((old) => (old && JSON.stringify(old) === JSON.stringify(list) ? old : list));
+    const p = s.ws.problems().filter((x) => x.year === year);
+    setProblems((old) => (JSON.stringify(old) === JSON.stringify(p) ? old : p));
     if (keep) {
       const names = new Set(keep);
       setSelected(names);
@@ -291,6 +294,37 @@ export function Main({ s, year, setYear, onOpen, onExit, onSession, focusName }:
         </button>
       </header>
 
+      {problems.length > 0 && (
+        <div class="problems" role="alert">
+          {problems.map((p) => (
+            <p key={p.path}>
+              {p.name ? (
+                <>
+                  The file of <b>{p.name}</b> ({p.year}) cannot be read: it is damaged or was changed outside Utility Soft, so the client is not in the
+                  list.
+                </>
+              ) : (
+                <>A client file of {p.year} cannot be read (it is damaged), so that client is not in the list.</>
+              )}{' '}
+              {p.restorable ? (
+                <button
+                  onClick={() =>
+                    attempt(async () => {
+                      const n = await s.ws.restoreDamaged(p);
+                      toast(`${n} is back, as last saved before the damage.`, 'ok');
+                      await loadClients([n]);
+                    })
+                  }
+                >
+                  Put back its last good version
+                </button>
+              ) : (
+                <span>Restore a backup (Utility ▸ Backups) to get it back.</span>
+              )}
+            </p>
+          ))}
+        </div>
+      )}
       {years.length === 0 ? (
         <div class="empty">
           <p>There are no years yet.</p>
@@ -379,10 +413,7 @@ export function Main({ s, year, setYear, onOpen, onExit, onSession, focusName }:
           {selected.size > 1 ? ` · ${selected.size} selected` : ''}
         </span>
         <span class="grow" />
-        <span title="Data loaded from">
-          Data: {s.dataLabel}
-          {s.ws.kind === 'desktop' && <span class="format-badge" title="Working on the desktop (Java) version's files. Utility ▸ Move to the new format makes a copy in the web format."> · desktop format</span>}
-        </span>
+        <span title="Data folder">Data: {s.dataLabel}</span>
       </footer>
 
       {dialog?.kind === 'add' && year && (
@@ -411,7 +442,7 @@ export function Main({ s, year, setYear, onOpen, onExit, onSession, focusName }:
           s={s}
           year={year}
           selection={targets}
-          onClose={() => setDialog(null)}
+          onClose={() => after()}
           onCopy={() => setDialog({ kind: 'copy' })}
           onNextYear={() => {
             setDialog(null);

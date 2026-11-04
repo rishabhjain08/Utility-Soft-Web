@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'preact/hooks';
-import { Client, checkName, UserError } from '../core/workspace';
+import { Client } from '../core/webstore';
+import { UserError, checkName } from '../core/names';
 import { sameName } from '../core/sort';
 import { InsertPlan, planInsert, planRename, samePlan } from '../core/serial';
 import { Session } from './session';
+import { collapseYear } from '../core/bill';
+import { financialYearOf } from '../core/years';
 import { Modal, attempt, busy, setBusyLabel, toast } from './ui';
 
 function nameProblem(name: string): string | null {
@@ -334,13 +337,15 @@ export function CopyYearsDialog({ s, years, current, onClose, onDone }: {
 
 // ---------- Drop-down lists ----------
 
-export function DropdownDialog({ s, onClose, onSaved }: { s: Session; onClose: () => void; onSaved?: () => void }) {
+export function DropdownDialog({ s, year, onClose, onSaved }: { s: Session; year: string | null; onClose: () => void; onSaved?: () => void }) {
   const [lists, setLists] = useState<Map<string, string[]> | null>(null);
   const [tab, setTab] = useState(s.types[0]?.tab ?? '');
+  // Entries are shown and typed with this year written out; it is stored so that each year shows its own.
+  const y = year ?? financialYearOf(new Date());
   useEffect(() => {
     attempt(async () => {
       const m = new Map<string, string[]>();
-      for (const t of s.types) m.set(t.tab, await s.ws.dropdown(t.tab, '##'));
+      for (const t of s.types) m.set(t.tab, await s.ws.dropdown(t.tab, y));
       setLists(m);
     });
   }, []);
@@ -348,7 +353,7 @@ export function DropdownDialog({ s, onClose, onSaved }: { s: Session; onClose: (
   const set = (next: string[]) => setLists(new Map(lists!).set(tab, next));
   const save = () =>
     attempt(async () => {
-      await s.ws.saveDropdowns(s.types, lists!);
+      await s.ws.saveDropdowns(s.types, new Map([...lists!].map(([k, v]) => [k, v.map((x) => collapseYear(x, y))])));
       toast('Drop-down lists saved.', 'ok');
       (onSaved ?? onClose)();
     });
@@ -373,7 +378,10 @@ export function DropdownDialog({ s, onClose, onSaved }: { s: Session; onClose: (
         </>
       }
     >
-      <p class="hint">These are offered while typing a bill's Field. Type ## where the year should appear.</p>
+      <p class="hint">
+        These are offered while typing a bill's Field. Write years as they are for <b>{y}</b> (for example “Assessment Year {y}”): in other years the
+        entries show that year instead.
+      </p>
       <div class="tabs" role="tablist">
         {s.types.map((t) => (
           <button key={t.tab} role="tab" aria-selected={t.tab === tab} class={t.tab === tab ? 'tab active' : 'tab'} onClick={() => setTab(t.tab)}>

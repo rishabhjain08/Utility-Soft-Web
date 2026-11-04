@@ -1,5 +1,5 @@
 // File System Access API implementation of FsDir (Chrome).
-import { Entry, FsDir, NotFoundError } from './fs';
+import { Entry, FileStat, FsDir, NotFoundError } from './fs';
 
 export class FsaDir implements FsDir {
   constructor(readonly handle: FileSystemDirectoryHandle) {}
@@ -29,6 +29,15 @@ export class FsaDir implements FsDir {
     try {
       const file = await (await this.handle.getFileHandle(name)).getFile();
       return new Uint8Array(await file.arrayBuffer());
+    } catch (e) {
+      throw wrap(e, name);
+    }
+  }
+
+  async stat(name: string): Promise<FileStat> {
+    try {
+      const file = await (await this.handle.getFileHandle(name)).getFile();
+      return { size: file.size, modified: file.lastModified };
     } catch (e) {
       throw wrap(e, name);
     }

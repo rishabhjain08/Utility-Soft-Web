@@ -2,7 +2,22 @@ import { test, expect } from '@playwright/test';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { cipherLines, cipherValue, expectClients, exportTo, gridRows, printed, programCopy, start, waitSaved } from './helpers';
+import { cipherLines, cipherValue, expectClients, exportTo, gridRows, printed, programCopy, saveRecoveryCode, start, waitSaved } from './helpers';
+import { WebBooks } from '../src/core/webstore';
+import { NodeDir } from '../tests/nodefs';
+
+function everything(root: string): string {
+  const parts: string[] = [];
+  const walk = (d: string) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      parts.push(e.name);
+      if (e.isDirectory()) walk(join(d, e.name));
+      else parts.push(readFileSync(join(d, e.name)).toString('latin1'));
+    }
+  };
+  walk(root);
+  return parts.join('\n');
+}
 
 const json = (p: string) => JSON.parse(readFileSync(p, 'utf8'));
 
@@ -19,6 +34,9 @@ test('a new installation in an empty folder, from first year to printed bill', a
   await expect(page.getByText('do not match')).toBeVisible();
   await page.getByLabel('Password again').fill('abc');
   await page.getByRole('button', { name: 'Continue' }).click();
+
+  // The recovery code first: there is no going on without saving it.
+  await saveRecoveryCode(page);
 
   // Letterhead (the Java "registration" steps).
   await expect(page.getByRole('heading', { name: 'Your letterhead' })).toBeVisible();
@@ -61,19 +79,20 @@ test('a new installation in an empty folder, from first year to printed bill', a
   await expect(printed(page).locator('.bill-copy').first().locator('.bc-words')).toHaveText('(Rs. Twenty Six Thousand Five Hundred only.)');
   await expect(printed(page).locator('.bill-copy').first().locator('.bc-firm')).toContainText('For R. K. & Co.');
 
-  // Kept in the web format: one settings file and one file per client and year.
-  expect(readdirSync(dir).sort()).toEqual(['open', 'utility-soft.json', 'years']);
-  const settings = json(join(dir, 'utility-soft.json'));
-  expect(settings.letterhead).toEqual({ firmName: ['For R. K. & Co.', '', 'Partner'], firmAddress: ['MG Road, Jaipur'], indexTitles: ['', '', ''] });
-  expect(JSON.stringify(settings)).not.toContain('"abc"');
-  const [file] = readdirSync(join(dir, 'years/26-27'));
-  expect(json(join(dir, 'years/26-27', file))).toMatchObject({
+  // Kept in the web format, encrypted: nothing on disk can be read without the password.
+  expect(readdirSync(dir).sort()).toEqual(['backups', 'history', 'open', 'settings.dat', 'utility-soft.json', 'years']);
+  const ws = (await WebBooks.unlock(new NodeDir(dir), 'abc'))!;
+  expect(await ws.letterhead()).toEqual({ firmName: ['For R. K. & Co.', '', 'Partner'], firmAddress: ['MG Road, Jaipur'], indexTitles: ['', '', ''] });
+  const [rec] = await ws.records('26-27');
+  expect(rec).toMatchObject({
     name: 'SHARMA TRADERS',
     serial: '1',
     billNo: '',
-    bills: [{ type: 'Audit', name: 'RAMESH SHARMA', groups: [{ rows: [{ text: 'Fee for Tax Audit for the Assessment Year ##', amount: '25000' }, { text: 'Expenses', amount: '1500' }] }] }],
+    bills: [{ type: 'Audit', name: 'RAMESH SHARMA', groups: [{ rows: [{ text: 'Fee for Tax Audit for the Assessment Year ##', amount: 25000 }, { text: 'Expenses', amount: 1500 }] }] }],
   });
-  expect(readdirSync(join(dir, 'open'))).toEqual(['26-27 SHARMA TRADERS.lock']);
+  expect(await ws.openClients()).toEqual([['26-27', 'SHARMA TRADERS']]);
+  const disk = everything(dir);
+  for (const secret of ['SHARMA', 'RAMESH', 'Jaipur', 'Expenses', 'abc"']) expect(disk).not.toContain(secret);
 
   // Exported for the desktop version: files exactly as the Java program lays them out.
   await page.getByRole('button', { name: '← Done' }).click();
@@ -116,12 +135,12 @@ test('starting a new Utility Soft creates its own folder inside a busy one', asy
   await page.getByLabel('Password', { exact: true }).fill('abc');
   await page.getByLabel('Password again').fill('abc');
   await page.getByRole('button', { name: 'Continue' }).click();
+  await saveRecoveryCode(page);
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('button', { name: 'Add the first year…' })).toBeVisible();
 
   expect(readdirSync(place).sort()).toEqual(['Billing', 'Utility Soft Files', 'notes.txt']);
-  expect(readdirSync(join(place, 'Billing')).sort()).toEqual(['utility-soft.json', 'years']);
-  expect(json(join(place, 'Billing', 'utility-soft.json')).password.kdf).toBe('PBKDF2-SHA256');
+  expect(json(join(place, 'Billing', 'utility-soft.json'))).toMatchObject({ format: 'utility-soft', recoverySaved: true });
 });
 
 test('starting a new Utility Soft in an existing one offers to open it', async ({ page }) => {

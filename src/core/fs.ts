@@ -21,6 +21,13 @@ export interface FsDir {
   remove(name: string): Promise<void>;
   /** Path components from this directory to a descendant handle, or null if not inside. */
   resolve?(other: FsDir): Promise<string[] | null>;
+  /** Size and modification time of a child file, without reading it. Throws NotFoundError when missing. */
+  stat?(name: string): Promise<FileStat>;
+}
+
+export interface FileStat {
+  size: number;
+  modified: number;
 }
 
 export class NotFoundError extends Error {
@@ -36,7 +43,11 @@ export function isNotFound(e: unknown): boolean {
 
 /** Finds a child entry by exact name, falling back to a case-insensitive match (Windows semantics). */
 export async function findEntry(dir: FsDir, name: string, kind?: EntryKind): Promise<Entry | null> {
-  const entries = await dir.list();
+  return pick(await dir.list(), name, kind);
+}
+
+/** The entry of a listing found as findEntry finds it. */
+export function pick(entries: Entry[], name: string, kind?: EntryKind): Entry | null {
   const ok = (e: Entry) => !kind || e.kind === kind;
   return (
     entries.find((e) => e.name === name && ok(e)) ??
@@ -81,22 +92,7 @@ export async function writeFile(dir: FsDir, name: string, data: Uint8Array): Pro
   await dir.write(e ? e.name : name, data);
 }
 
-export async function removeEntry(dir: FsDir, name: string): Promise<void> {
-  const e = await findEntry(dir, name);
-  if (e) await dir.remove(e.name);
-}
 
-/** Copies every file and folder in `from` into `to`, byte for byte. */
-export async function copyTree(from: FsDir, to: FsDir, onFile?: () => void): Promise<void> {
-  for (const e of await from.list()) {
-    if (e.kind === 'directory') {
-      await copyTree(await from.dir(e.name), await ensureDir(to, e.name), onFile);
-    } else {
-      await writeFile(to, e.name, await from.read(e.name));
-      onFile?.();
-    }
-  }
-}
 
 export async function listDirs(dir: FsDir): Promise<string[]> {
   return (await dir.list()).filter((e) => e.kind === 'directory').map((e) => e.name);
@@ -141,5 +137,6 @@ export function readOnly(dir: FsDir): FsDir {
     },
   };
   if (dir.resolve) ro.resolve = (other: FsDir) => dir.resolve!(other);
+  if (dir.stat) ro.stat = (name: string) => dir.stat!(name);
   return ro;
 }

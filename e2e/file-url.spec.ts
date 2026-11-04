@@ -38,7 +38,7 @@ test('the packaged file works opened from disk', async ({ page }) => {
   await page.getByRole('button', { name: /Open Utility Soft folder/ }).click();
   await page.getByLabel('Password').fill('puja');
   await page.getByRole('button', { name: 'OK' }).click();
-  // Moving to the web format (password hashing needs a secure context too).
+  // Moving to the web format (encryption needs a secure context too).
   await migrateTo(page, picker, mkdtempSync(join(tmpdir(), 'usw-file-')));
   await expectClients(page, ['1|PREM|', '2|RISHABH|']);
   await page.getByRole('cell', { name: 'RISHABH' }).dblclick();

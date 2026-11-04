@@ -1,9 +1,8 @@
-// Files that live in the program folder (next to billing.jar).
-import {
-  decodeCipherLines, decodeCipherValue, decodePlainLines, encodeCipherLines, encodeCipherValue,
-  encodePlain, encodePlainLines, sanitize,
-} from './codec';
-import { FsDir, tryRead, writeFile } from './fs';
+// Files of the desktop (Java) program folder, next to billing.jar (read when moving to
+// the web format; an export writes them, see core/migrate.ts). Also the formats of
+// what is kept from them in the web format: letterhead, tabs, drop-down lists.
+import { decodeCipherLines, decodeCipherValue, decodePlainLines, sanitize } from './codec';
+import { FsDir, tryRead } from './fs';
 import { sameName } from './sort';
 
 export const FILES = {
@@ -44,9 +43,6 @@ export async function readPassword(program: FsDir): Promise<string | null> {
   return b === null ? null : decodeCipherValue(b);
 }
 
-export async function writePassword(program: FsDir, password: string): Promise<void> {
-  await writeFile(program, FILES.pass, encodeCipherValue(password));
-}
 
 // ---------- impinfo.txt ----------
 // line 0: (folder^tab)(folder^tab)...
@@ -59,9 +55,6 @@ export async function readImpinfo(program: FsDir): Promise<string[] | null> {
   return b === null ? null : decodeCipherLines(b);
 }
 
-async function writeImpinfo(program: FsDir, lines: string[]): Promise<void> {
-  await writeFile(program, FILES.impinfo, encodeCipherLines(lines));
-}
 
 export function parseBillTypes(line: string | undefined): BillType[] {
   const out: BillType[] = [];
@@ -131,18 +124,7 @@ export function cleanLetterhead(lh: Letterhead): Letterhead {
   return letterheadFromImpinfo(['', ...letterheadLines(lh)])!;
 }
 
-export async function writeLetterhead(program: FsDir, lh: Letterhead): Promise<void> {
-  const lines = (await readImpinfo(program)) ?? [];
-  const typesLine = lines[0] ?? formatBillTypes(DEFAULT_BILL_TYPES);
-  const rest = lines.slice(4);
-  await writeImpinfo(program, [typesLine, ...letterheadLines(lh), ...rest]);
-}
 
-export async function writeBillTypes(program: FsDir, types: BillType[]): Promise<void> {
-  const lines = (await readImpinfo(program)) ?? [];
-  lines[0] = formatBillTypes(types);
-  await writeImpinfo(program, lines);
-}
 
 // ---------- ddown.txt (plain text) ----------
 // One line per tab: "TabTitle^item^item..."; "##" stands for the year.
@@ -167,10 +149,6 @@ export const DEFAULT_DROPDOWNS = [
   'Others^Fee for Partnership Deed dated ^Fee for Retirement Deed dated ^Fee for Dissolution Deed dated ^Fee for Gift Deed dated ^Expenses',
 ];
 
-/** Replaces the lists for the given tabs, keeping lines for other tabs untouched. */
-export async function writeDropdowns(program: FsDir, types: BillType[], lists: Map<string, string[]>): Promise<void> {
-  await writeFile(program, FILES.ddown, encodePlainLines(mergeDropdowns(await readDropdownLines(program), types, lists)));
-}
 
 /** ddown.txt lines with the lists for `types` replaced (other lines are kept). */
 export function mergeDropdowns(old: string[], types: BillType[], lists: Map<string, string[]>): string[] {
@@ -195,9 +173,6 @@ export async function readBackupPath(program: FsDir): Promise<string> {
   return b === null ? '' : decodeCipherValue(b);
 }
 
-export async function writeBackupPath(program: FsDir, path: string): Promise<void> {
-  await writeFile(program, FILES.backupto, encodeCipherValue(path));
-}
 
 // ---------- loaddatafrom.txt (plain text) ----------
 // Empty: data is in <program>/data. Otherwise line 1 is the data folder path
@@ -208,9 +183,6 @@ export async function readDataPath(program: FsDir): Promise<string> {
   return b === null ? '' : (decodePlainLines(b)[0] ?? '').trim();
 }
 
-export async function writeDataPath(program: FsDir, path: string): Promise<void> {
-  await writeFile(program, FILES.loaddatafrom, path === '' ? new Uint8Array() : encodePlain(`${path}\r\n1`));
-}
 
 /** True for paths Java resolves against the program folder (no drive, root or UNC prefix). */
 export function isRelativePath(p: string): boolean {

@@ -1,23 +1,52 @@
-// The web format does everything the desktop layout does (tests/workspace.test.ts), through the same calls.
+// The web format: everything the desktop version does, plus encryption, safe
+// changes of several files, earlier versions, the bin, conflicts and open clients.
 import { beforeEach, describe, expect, it } from 'vitest';
-import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { NodeDir } from './nodefs';
-import { WebBooks, createStore, isWebStore } from '../src/core/webstore';
+import { FAST, copyOf, desktopOf, empty, everything } from './testdata';
+import { BillConflict, WebBooks, createStore, isWebStore } from '../src/core/webstore';
 import { migrateDesktop } from '../src/core/migrate';
-
-const SAMPLE = join(import.meta.dirname, 'fixtures', 'java-sample');
+import { FsDir } from '../src/core/fs';
 
 async function sampleStore(): Promise<{ dir: string; web: WebBooks }> {
-  const src = mkdtempSync(join(tmpdir(), 'usw-src-'));
-  cpSync(SAMPLE, src, { recursive: true });
-  const dir = mkdtempSync(join(tmpdir(), 'usw-web-'));
-  await migrateDesktop({ program: new NodeDir(src), data: new NodeDir(join(src, 'data')) }, new NodeDir(dir));
-  return { dir, web: new WebBooks(new NodeDir(dir)) };
+  const dir = empty();
+  const r = await migrateDesktop(desktopOf(copyOf('java-sample')), new NodeDir(dir), FAST);
+  return { dir, web: r.books };
 }
 
-const json = (p: string) => JSON.parse(readFileSync(p, 'utf8'));
+const MIN = 60_000;
+
+/** A folder that stops working (as if the computer was switched off) after `writes` more writes. */
+class Failing implements FsDir {
+  constructor(
+    private inner: FsDir,
+    private budget: { writes: number },
+  ) {}
+  get name() {
+    return this.inner.name;
+  }
+  list() {
+    return this.inner.list();
+  }
+  async dir(name: string, create?: boolean): Promise<FsDir> {
+    return new Failing(await this.inner.dir(name, create), this.budget);
+  }
+  read(name: string) {
+    return this.inner.read(name);
+  }
+  stat(name: string) {
+    return this.inner.stat!(name);
+  }
+  async write(name: string, data: Uint8Array) {
+    if (this.budget.writes-- <= 0) throw new Error('power cut');
+    await this.inner.write(name, data);
+  }
+  async remove(name: string) {
+    if (this.budget.writes-- <= 0) throw new Error('power cut');
+    await this.inner.remove(name);
+  }
+}
 
 describe('web format', () => {
   let dir: string;
@@ -38,10 +67,9 @@ describe('web format', () => {
     expect((await web.billTypes()).map((t) => t.tab)).toEqual(['Audit', 'Vat', 'Tax', 'Others']);
     expect(await web.bills('06-07', 'RISHABH', 'Audit')).toEqual(['PREM CHAND']);
     expect(await web.readBill('06-07', 'RISHABH', 'Audit', 'PREM CHAND')).toEqual([{ desc: 'pooja', amount: '20' }]);
-    // Plain, readable JSON; the password only as a hash.
-    const settings = json(join(dir, 'utility-soft.json'));
-    expect(settings.format).toBe('utility-soft');
-    expect(JSON.stringify(settings)).not.toContain('puja');
+    const manifest = JSON.parse(readFileSync(join(dir, 'utility-soft.json'), 'utf8'));
+    expect(manifest.format).toBe('utility-soft');
+    expect(Object.keys(manifest.keys)).toEqual(['password', 'recovery']);
   });
 
   it('adds clients with correct serial numbers', async () => {
@@ -82,14 +110,17 @@ describe('web format', () => {
       { desc: 'Expenses', amount: '200' },
     ]);
     expect(await web.readBillLines('06-07', 'PREM', 'Tax', 'SHYAM')).toEqual(['Fee for IT Return for the Assessment Year ##,1500', 'New Name,New', 'Expenses,200']);
-    const rec = readdirSync(join(dir, 'years/06-07')).map((f) => json(join(dir, 'years/06-07', f))).find((r) => r.name === 'PREM');
-    expect(rec.bills[0]).toEqual({
+    const rec = (await web.records('06-07')).find((r) => r.name === 'PREM')!;
+    expect(rec.bills[0]).toMatchObject({
       type: 'Tax',
       name: 'SHYAM',
-      groups: [{ rows: [{ text: 'Fee for IT Return for the Assessment Year ##', amount: '1500' }] }, { rows: [{ text: 'Expenses', amount: '200' }] }],
+      groups: [{ rows: [{ text: 'Fee for IT Return for the Assessment Year ##', amount: 1500 }] }, { rows: [{ text: 'Expenses', amount: 200 }] }],
     });
+    // Bills keep their id through a rename (earlier years stay linked).
+    const id = rec.bills[0].id;
     await web.renameBill('06-07', 'PREM', 'Tax', 'SHYAM', 'ram');
     expect(await web.bills('06-07', 'PREM', 'Tax')).toEqual(['RAM']);
+    expect((await web.records('06-07')).find((r) => r.name === 'PREM')!.bills[0].id).toBe(id);
     await expect(web.createBill('06-07', 'PREM', 'Tax', 'Ram')).rejects.toThrow('already exists');
     await web.deleteBill('06-07', 'PREM', 'Tax', 'RAM');
     expect(await web.bills('06-07', 'PREM', 'Tax')).toEqual([]);
@@ -160,31 +191,24 @@ describe('web format', () => {
     expect(await web.backupPath()).toBe('D:\\Backups');
   });
 
-  it('marks open clients, one file each', async () => {
-    expect(await web.isLocked('06-07', 'PREM')).toBe(false);
-    await web.lock('06-07', 'PREM');
-    await web.lock('06-07', 'RISHABH');
-    expect(await web.isLocked('06-07', 'prem')).toBe(true);
-    await web.unlock('06-07', 'PREM');
-    expect(await web.isLocked('06-07', 'PREM')).toBe(false);
-    expect(await web.isLocked('06-07', 'RISHABH')).toBe(true);
+  it('stores amounts as whole numbers, without leading zeros or plus', async () => {
+    await web.writeBill('06-07', 'PREM', 'Tax', 'X', [
+      { desc: 'a', amount: '007' },
+      { desc: 'b', amount: '+5' },
+      { desc: 'c', amount: '' },
+      { desc: 'd', amount: '-3' },
+    ]);
+    expect(await web.readBillLines('06-07', 'PREM', 'Tax', 'X')).toEqual(['a,7', 'b,5', 'c,', 'd,-3']);
+    const rows = (await web.records('06-07')).find((r) => r.name === 'PREM')!.bills[0].groups[0].rows;
+    expect(rows.map((r) => r.amount)).toEqual([7, 5, null, -3]);
   });
 
-  it('backs up into a folder that opens like the original', async () => {
-    await web.lock('06-07', 'PREM');
-    const dest = mkdtempSync(join(tmpdir(), 'usw-bak-'));
-    await web.backupTo(new NodeDir(dest));
-    expect(readdirSync(dest).sort()).toEqual(['utility-soft.json', 'years']);
-    const copy = new WebBooks(new NodeDir(dest));
-    expect(await copy.checkPassword('puja')).toBe(true);
-    expect(await copy.readBill('06-07', 'RISHABH', 'Audit', 'PREM CHAND')).toEqual([{ desc: 'pooja', amount: '20' }]);
-    expect(await copy.isLocked('06-07', 'PREM')).toBe(false);
-  });
-
-  it('starts a new store with the default tabs and lists', async () => {
-    const d = mkdtempSync(join(tmpdir(), 'usw-new-'));
-    const fresh = await createStore(new NodeDir(d), 'secret');
-    expect(await fresh.checkPassword('secret')).toBe(true);
+  it('starts a new store with the default tabs and lists, and a recovery code', async () => {
+    const d = empty();
+    const { books: fresh, recoveryCode } = await createStore(new NodeDir(d), 'secret', FAST);
+    expect(recoveryCode).toMatch(/^([0-9A-Z]{4}-){5}[0-9A-Z]{4}$/);
+    expect(await WebBooks.unlock(new NodeDir(d), 'secret')).not.toBe(null);
+    expect(await WebBooks.unlockWithRecovery(new NodeDir(d), recoveryCode)).not.toBe(null);
     expect(await fresh.letterhead()).toBe(null);
     expect((await fresh.billTypes()).map((t) => t.tab)).toEqual(['Audit', 'Vat', 'Tax', 'Others']);
     expect(await fresh.dropdown('Vat', '26-27')).toEqual(['Fee for VAT Audit for the Assessment Year 26-27', 'Expenses']);
@@ -193,15 +217,142 @@ describe('web format', () => {
     expect(existsSync(join(d, 'years/26-27'))).toBe(true);
     await fresh.addClient('26-27', 'Asha', false);
     expect(await fresh.clients('26-27')).toEqual([{ name: 'ASHA', serial: '1', billNo: '' }]);
+    expect(everything(d)).not.toContain('ASHA');
+    expect(everything(d)).not.toContain('Expenses');
   });
 
-  it('says clearly when a file is damaged or from a newer version', async () => {
-    const { writeFileSync } = await import('node:fs');
-    const f = readdirSync(join(dir, 'years/06-07'))[0];
-    writeFileSync(join(dir, 'years/06-07', f), '{ broken');
-    await expect(web.clients('06-07')).rejects.toThrow('damaged');
-    const s = json(join(dir, 'utility-soft.json'));
-    writeFileSync(join(dir, 'utility-soft.json'), JSON.stringify({ ...s, version: 99 }));
-    await expect(web.settings()).rejects.toThrow('newer');
+  it('refuses data from a newer version', async () => {
+    const m = JSON.parse(readFileSync(join(dir, 'utility-soft.json'), 'utf8'));
+    writeFileSync(join(dir, 'utility-soft.json'), JSON.stringify({ ...m, version: 99 }));
+    await expect(WebBooks.unlock(new NodeDir(dir), 'puja')).rejects.toThrow('newer');
+  });
+});
+
+describe('safety', () => {
+  let dir: string;
+  let web: WebBooks;
+  let now: number;
+  beforeEach(async () => {
+    ({ dir, web } = await sampleStore());
+    now = Date.parse('2026-11-04T10:00:00Z');
+    web = web.as({ now: () => now });
+    for (const n of ['A', 'B', 'C', 'D']) await web.addClient('06-07', n, false);
+  });
+
+  it('finishes a change of several files that was cut off half way', async () => {
+    // Deleting B renumbers C, D, PREM and RISHABH: power cut after the journal and two files.
+    const budget = { writes: 3 };
+    const cut = new WebBooks(new (await import('../src/core/vault')).Vault(new Failing(new NodeDir(dir), budget), web.vault.key), { now: () => now });
+    await expect(cut.deleteClients('06-07', ['B'])).rejects.toThrow('power cut');
+    const half = (await web.clients('06-07')).map((c) => `${c.name}=${c.serial}`);
+    expect(half).not.toEqual(['A=1', 'C=2', 'D=3', 'PREM=4', 'RISHABH=5']);
+    // Opening it a few minutes later finishes it.
+    now += 2 * MIN;
+    expect(await web.open()).toEqual({ recovered: expect.any(Number), skipped: 0 });
+    expect((await web.clients('06-07')).map((c) => `${c.name}=${c.serial}`)).toEqual(['A=1', 'C=2', 'D=3', 'PREM=4', 'RISHABH=5']);
+    expect(readdirSync(join(dir, 'journal'))).toEqual([]);
+    expect(await web.logText()).toContain('Finished an interrupted change (delete B)');
+  });
+
+  it('does not undo what was changed after the interruption', async () => {
+    const cut = new WebBooks(new (await import('../src/core/vault')).Vault(new Failing(new NodeDir(dir), { writes: 2 }), web.vault.key), { now: () => now });
+    await expect(cut.deleteClients('06-07', ['B'])).rejects.toThrow('power cut');
+    await web.setBillNo('06-07', 'RISHABH', '99');
+    now += 2 * MIN;
+    const r = await web.open();
+    expect(r.skipped).toBe(1);
+    expect((await web.clients('06-07')).find((c) => c.name === 'RISHABH')!.billNo).toBe('99');
+  });
+
+  it('keeps earlier versions of a bill', async () => {
+    const save = (amount: string) => web.writeBill('06-07', 'RISHABH', 'Audit', 'PREM CHAND', [{ desc: 'pooja', amount }]);
+    await save('21');
+    now += 1 * MIN;
+    await save('22'); // Too soon for another version.
+    now += 11 * MIN;
+    await save('23');
+    const v = await web.billVersions('06-07', 'RISHABH', 'Audit', 'PREM CHAND');
+    expect(v.map((x) => x.lines)).toEqual([['pooja,22'], ['pooja,20']]);
+  });
+
+  it('keeps deleted clients and bills in the bin, and puts them back', async () => {
+    await web.writeBill('06-07', 'C', 'Tax', 'ITR', [{ desc: 'Return', amount: '300' }]);
+    await web.deleteClients('06-07', ['C']);
+    expect((await web.clients('06-07')).map((c) => `${c.name}=${c.serial}`)).toEqual(['A=1', 'B=2', 'D=3', 'PREM=4', 'RISHABH=5']);
+    await web.deleteBill('06-07', 'RISHABH', 'Audit', 'PREM CHAND');
+    const bin = await web.bin();
+    expect(bin.map((e) => (e.kind === 'client' ? `client ${e.record.name}` : `bill ${e.bill.name}`))).toEqual(['bill PREM CHAND', 'client C']);
+    expect(await web.restore(bin[1])).toBe('C (06-07) is back, S.No. 3.');
+    expect((await web.clients('06-07')).map((c) => `${c.name}=${c.serial}`)).toEqual(['A=1', 'B=2', 'C=3', 'D=4', 'PREM=5', 'RISHABH=6']);
+    expect(await web.readBillLines('06-07', 'C', 'Tax', 'ITR')).toEqual(['Return,300']);
+    await web.restore(bin[0]);
+    expect(await web.readBillLines('06-07', 'RISHABH', 'Audit', 'PREM CHAND')).toEqual(['pooja,20']);
+    expect(await web.bin()).toEqual([]);
+    // Emptied after 30 days.
+    await web.deleteClients('06-07', ['A']);
+    now += 31 * 24 * 60 * MIN;
+    await web.open();
+    expect(await web.bin()).toEqual([]);
+  });
+
+  it('refuses to save over a bill changed on another computer', async () => {
+    const read = await web.readBillLines('06-07', 'RISHABH', 'Audit', 'PREM CHAND');
+    const other = web.as({ computer: { id: 'other', name: 'Office PC' } });
+    await other.writeBill('06-07', 'RISHABH', 'Audit', 'PREM CHAND', [{ desc: 'pooja', amount: '99' }]);
+    const e = await web.writeBill('06-07', 'RISHABH', 'Audit', 'PREM CHAND', [{ desc: 'pooja', amount: '25' }], read).catch((x) => x);
+    expect(e).toBeInstanceOf(BillConflict);
+    expect((e as BillConflict).current).toEqual(['pooja,99']);
+    // Keeping mine: saved over the version now known.
+    const saved = await web.writeBill('06-07', 'RISHABH', 'Audit', 'PREM CHAND', [{ desc: 'pooja', amount: '25' }], ['pooja,99']);
+    expect(saved).toEqual(['pooja,25']);
+  });
+
+  it('says which computer has a client open, until it stops saying so', async () => {
+    const office = web.as({ computer: { id: 'pc1', name: 'Office PC' } });
+    await office.lock('06-07', 'PREM');
+    expect(await web.lockInfo('06-07', 'PREM')).toEqual({ computer: { id: 'pc1', name: 'Office PC' }, since: now, mine: false });
+    expect(await office.lockInfo('06-07', 'prem')).toMatchObject({ mine: true });
+    // Another computer cannot release it; it lapses when the office computer goes quiet.
+    await web.unlock('06-07', 'PREM');
+    expect(await web.isLocked('06-07', 'PREM')).toBe(true);
+    now += 4 * MIN;
+    await office.heartbeat('06-07', 'PREM');
+    now += 4 * MIN;
+    expect(await web.isLocked('06-07', 'PREM')).toBe(true);
+    now += 2 * MIN;
+    expect(await web.isLocked('06-07', 'PREM')).toBe(false);
+    await office.unlock('06-07', 'PREM');
+    expect(readdirSync(join(dir, 'open'))).toEqual([]);
+    expect(everything(dir)).not.toContain('Office PC');
+  });
+
+  it('sets aside a damaged client file and can put back its last good version', async () => {
+    await web.setBillNo('06-07', 'PREM', '5');
+    now += 11 * MIN;
+    await web.setBillNo('06-07', 'PREM', '6');
+    const rec = (await web.records('06-07')).find((r) => r.name === 'PREM')!;
+    const file = join(dir, 'years/06-07', `${rec.id}.dat`);
+    const bytes = readFileSync(file);
+    bytes[bytes.length - 1] ^= 1;
+    writeFileSync(file, bytes);
+    const fresh = web.as({});
+    expect((await fresh.clients('06-07')).map((c) => c.name)).toEqual(['A', 'B', 'C', 'D', 'RISHABH']);
+    expect(fresh.problems()).toEqual([{ path: `years/06-07/${rec.id}.dat`, year: '06-07', name: 'PREM', restorable: true }]);
+    expect(await fresh.restoreDamaged(fresh.problems()[0])).toBe('PREM');
+    expect((await fresh.clients('06-07')).find((c) => c.name === 'PREM')!.billNo).toBe('5');
+    expect(fresh.problems()).toEqual([]);
+  });
+
+  it('sees changes made by another computer', async () => {
+    expect((await web.clients('06-07')).length).toBe(6);
+    const other = web.as({ computer: { id: 'other', name: '' } });
+    await other.setBillNo('06-07', 'A', '42');
+    expect((await web.clients('06-07')).find((c) => c.name === 'A')!.billNo).toBe('42');
+  });
+
+  it('keeps an encrypted log of problems', async () => {
+    await web.log('Something went wrong with PREM');
+    expect(await web.logText()).toContain('Something went wrong with PREM');
+    expect(everything(dir)).not.toContain('Something went wrong');
   });
 });

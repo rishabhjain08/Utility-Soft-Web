@@ -1,6 +1,9 @@
 // Screenshots of every screen, for visual review (not assertions).
 import { test } from '@playwright/test';
-import { programCopy, selectClient, start } from './helpers';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { programCopy, saveRecoveryCode, selectClient, start } from './helpers';
 
 test('tour', async ({ page }) => {
   const shot = (n: string) => page.screenshot({ path: `test-results/tour-${n}.png` });
@@ -14,7 +17,14 @@ test('tour', async ({ page }) => {
   await page.getByRole('button', { name: 'OK' }).click();
   await page.getByRole('heading', { name: 'Move to the new format' }).waitFor();
   await shot('02b-move');
-  await page.getByRole('button', { name: 'Keep using the desktop files' }).click();
+  picker.next(mkdtempSync(join(tmpdir(), 'usw-tour-')));
+  await page.getByRole('button', { name: 'Make a copy in the new format…' }).click();
+  await page.getByRole('dialog', { name: 'Copy made and checked' }).waitFor();
+  await shot('02c-report');
+  await page.getByRole('button', { name: 'Open the copy' }).click();
+  await page.getByRole('heading', { name: 'Save your recovery code' }).waitFor();
+  await shot('02d-recovery');
+  await saveRecoveryCode(page);
   await page.locator('table.clients').waitFor();
   await selectClient(page, 'PREM');
   await shot('03-main');
@@ -22,7 +32,7 @@ test('tour', async ({ page }) => {
   await page.getByLabel('Name').fill('mohan lal');
   await shot('04-add');
   await page.getByRole('button', { name: 'Add', exact: true }).click();
-  await page.getByRole('button', { name: 'Utility…' }).click();
+  await page.getByRole('button', { name: 'Utility…', exact: true }).click();
   await shot('05-utility');
   await page.keyboard.press('Escape');
   await page.getByText('RISHABH').dblclick();

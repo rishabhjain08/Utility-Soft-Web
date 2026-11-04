@@ -2,9 +2,8 @@
 
     python3 compat/check_web_to_java.py [DATA REPAIRED]
 
-DATA defaults to .tmp/compat-web (built on the desktop files by e2e/compat-build.spec.ts);
-.tmp/compat-export is the same data built in the web format and exported. REPAIRED defaults
-to .tmp/compat-repair (e2e/compat-repair.spec.ts); .tmp/compat-repair-export is its export."""
+DATA defaults to .tmp/compat-export (built in the web format and exported by
+e2e/compat-build.spec.ts); REPAIRED to .tmp/compat-repair-export (e2e/compat-repair.spec.ts)."""
 import shutil
 import subprocess
 import sys
@@ -12,7 +11,7 @@ from pathlib import Path
 
 from javaapp import HERE, JDK, JAVA_SRC, DISPLAY, JavaApp
 
-SRC = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else HERE.parent / '.tmp' / 'compat-web'
+SRC = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else HERE.parent / '.tmp' / 'compat-export'
 WORK = HERE.parent / '.tmp' / 'compat-web-java'
 failures = []
 
@@ -113,7 +112,7 @@ def main():
     check('Java prints the web-written bill', r.stdout.strip().splitlines()[-1] if r.stdout.strip() else r.stderr[-300:], 'pages=2')
 
     # Java-written data that the Java program could not open, after the web app opened it.
-    repair_src = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else HERE.parent / '.tmp' / 'compat-repair'
+    repair_src = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else HERE.parent / '.tmp' / 'compat-repair-export'
     repair = HERE.parent / '.tmp' / 'compat-repair-java'
     if repair_src.exists():
         shutil.rmtree(repair, ignore_errors=True)

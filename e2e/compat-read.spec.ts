@@ -7,15 +7,6 @@ import { expectClients, gridRows, login, migrateTo, printed, start } from './hel
 
 const JAVA_DATA = join(import.meta.dirname, '..', '.tmp', 'compat-java');
 
-test('reads data written by the Java program', async ({ page }) => {
-  test.skip(!existsSync(JAVA_DATA), 'run compat/build_java_data.py first');
-  const dir = mkdtempSync(join(tmpdir(), 'usw-java-'));
-  cpSync(JAVA_DATA, dir, { recursive: true });
-  const picker = await start(page);
-  await login(page, picker, dir);
-  await checks(page);
-});
-
 /** Every file under `root` with its bytes. */
 function tree(root: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -36,7 +27,7 @@ test('moves data written by the Java program to the web format without changing 
   cpSync(JAVA_DATA, dir, { recursive: true });
   const before = tree(dir);
   const picker = await start(page);
-  await login(page, picker, dir, 'puja', false);
+  await login(page, picker, dir);
   await migrateTo(page, picker, mkdtempSync(join(tmpdir(), 'usw-java-web-')));
   await checks(page);
   expect(tree(dir)).toEqual(before);

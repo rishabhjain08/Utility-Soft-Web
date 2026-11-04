@@ -8,7 +8,7 @@ import { historyColumns, linesFromRows, mergeHistory, protectForJava, rowsFromLi
 import { amountInWords, formatAmount, groupIndian } from '../src/core/money';
 import { compareIgnoreCase, sortStrings } from '../src/core/sort';
 import { financialYearOf, nextYear, previousYear, previousYears } from '../src/core/years';
-import { backupFolderName } from '../src/core/workspace';
+import { backupFolderName } from '../src/core/util';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
 

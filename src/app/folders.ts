@@ -67,12 +67,6 @@ export async function hasRememberedPath(kind: 'data' | 'backup', path: string): 
   return !!path && !!(await kvGet(pathKey(kind, path)));
 }
 
-/** Path of `dir` relative to the program folder (Java style, backslashes), or null. */
-export async function relativeTo(program: FsDir, dir: FsDir): Promise<string | null> {
-  const parts = program.resolve ? await program.resolve(dir) : null;
-  if (!parts) return null;
-  return parts.join('\\');
-}
 
 /** Web-only preferences. */
 export interface Prefs {

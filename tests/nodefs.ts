@@ -1,7 +1,7 @@
 // FsDir over a real folder, for tests and the Java compatibility checks.
-import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
-import { Entry, FsDir, NotFoundError } from '../src/core/fs';
+import { Entry, FileStat, FsDir, NotFoundError } from '../src/core/fs';
 
 export class NodeDir implements FsDir {
   constructor(readonly path: string) {}
@@ -17,15 +17,28 @@ export class NodeDir implements FsDir {
 
   async dir(name: string, create = false): Promise<FsDir> {
     const p = join(this.path, name);
-    if (create) await mkdir(p, { recursive: true });
-    const ents = await readdir(this.path, { withFileTypes: true });
-    if (!ents.some((e) => e.name === name && e.isDirectory())) throw new NotFoundError(name);
+    if (create) {
+      await mkdir(p, { recursive: true });
+      return new NodeDir(p);
+    }
+    const st = await stat(p).catch(() => null);
+    if (!st?.isDirectory()) throw new NotFoundError(name);
     return new NodeDir(p);
   }
 
   async read(name: string): Promise<Uint8Array> {
     try {
       return new Uint8Array(await readFile(join(this.path, name)));
+    } catch {
+      throw new NotFoundError(name);
+    }
+  }
+
+  async stat(name: string): Promise<FileStat> {
+    try {
+      const st = await stat(join(this.path, name));
+      if (!st.isFile()) throw new Error();
+      return { size: st.size, modified: st.mtimeMs };
     } catch {
       throw new NotFoundError(name);
     }

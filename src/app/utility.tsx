@@ -1,16 +1,19 @@
 import { useEffect, useState } from 'preact/hooks';
-import { FsDir, ensureDir, walk } from '../core/fs';
-import { isRelativePath, pathParts, writeDataPath } from '../core/config';
-import { Client, backupFolderName } from '../core/workspace';
-import { PasswordStore, Session, looksLikeData, openSession, prepareDataFolder, refreshSession } from './session';
-import { compareFlow, exportFlow, migrateFlow } from './migrate';
+import { FsDir } from '../core/fs';
+import { BinEntry, Client, WebBooks } from '../core/webstore';
+import { backupFolderName } from '../core/util';
+import { BackupEntry, checkBackup, insideBackups, isBackup, listBackups, makeBackup, openBackup, pruneBackups, restoreBackup } from '../core/backup';
+import { compare, webSide } from '../core/verify';
+import { Session, nameThisComputer, refreshSession, thisComputer } from './session';
+import { ReportView, compareFlow, exportFlow } from './migrate';
+import { RecoverySetup } from './recovery';
 import { DropdownDialog } from './dialogs';
 import { LetterheadForm } from './start';
-import { Prefs, hasRememberedPath, loadPrefs, pickFolder, rememberPath, rememberedPath, relativeTo, savePrefs } from './folders';
+import { Prefs, hasRememberedPath, loadPrefs, pickFolder, rememberPath, rememberedPath, savePrefs } from './folders';
 import { printBills, printIndex } from './printing';
-import { Modal, attempt, busy, confirmDialog, promptDialog, setBusyLabel, toast } from './ui';
+import { Modal, attempt, busy, confirmDialog, mountDialog, promptDialog, setBusyLabel, toast } from './ui';
 
-type Sub = 'dropdowns' | 'letterhead' | 'password' | 'backup' | 'data' | null;
+type Sub = 'dropdowns' | 'letterhead' | 'password' | 'backup' | 'bin' | 'log' | 'recovery' | null;
 
 interface Props {
   s: Session;
@@ -26,28 +29,36 @@ interface Props {
 export function UtilityDialog({ s, year, selection, onClose, onCopy, onNextYear, onSession, onExit }: Props) {
   const [sub, setSub] = useState<Sub>(null);
 
-  if (sub === 'dropdowns') return <DropdownDialog s={s} onClose={() => setSub(null)} onSaved={onClose} />;
+  if (sub === 'dropdowns') return <DropdownDialog s={s} year={year} onClose={() => setSub(null)} onSaved={onClose} />;
   if (sub === 'letterhead')
     return (
       <Modal title="Letterhead" onClose={() => setSub(null)} class="letterhead-modal">
         <LetterheadForm
           save={(lh) => s.ws.saveLetterhead(lh)}
           initial={s.letterhead}
+          year={year}
           embedded
           onSkip={() => setSub(null)}
           onDone={() => attempt(async () => onSession(await refreshSession(s)))}
         />
       </Modal>
     );
-  if (sub === 'password') return <ChangePasswordDialog store={s.ws} onClose={() => setSub(null)} onDone={(password) => onSession({ ...s, password })} />;
-  if (sub === 'backup') return <BackupDialog s={s} onClose={() => setSub(null)} />;
-  if (sub === 'data') return <DataLocationDialog s={s} onClose={() => setSub(null)} onSession={onSession} />;
+  if (sub === 'password') return <ChangePasswordDialog ws={s.ws} onClose={() => setSub(null)} onDone={(password) => onSession({ ...s, password })} />;
+  if (sub === 'backup') return <BackupDialog s={s} onClose={() => setSub(null)} onRestored={() => attempt(async () => onSession(await refreshSession(s)))} />;
+  if (sub === 'bin') return <BinDialog ws={s.ws} onClose={() => setSub(null)} />;
+  if (sub === 'log') return <LogDialog ws={s.ws} onClose={() => setSub(null)} />;
+  if (sub === 'recovery')
+    return (
+      <div class="backdrop full">
+        <RecoverySetup ws={s.ws} folder={s.dataLabel} onDone={onClose} onCancel={() => setSub(null)} />
+      </div>
+    );
 
   const addTab = async () => {
     const name = await promptDialog({
       title: 'Add new bill tab',
       label: 'Tab name',
-      hint: 'A new tab (bill type) is added for every client in every year.',
+      hint: 'A new tab (bill type) for every client in every year.',
       validate: (v) => (s.types.some((t) => t.tab.toLowerCase() === v.trim().toLowerCase()) ? 'This tab name already exists.' : null),
     });
     if (!name) return;
@@ -58,23 +69,27 @@ export function UtilityDialog({ s, year, selection, onClose, onCopy, onNextYear,
     });
   };
 
-  const checkAll = () =>
-    busy('Checking bills…', async () => {
-      if (s.ws.kind !== 'desktop') return;
-      const r = await s.ws.protectAll((p) => setBusyLabel(`Checking bills… ${p.checked}`));
-      toast(
-        r.fixed
-          ? `Checked ${r.checked} bills; fixed ${r.fixed} so the desktop version can open them.`
-          : `Checked ${r.checked} bills; the desktop version can open all of them.`,
-        'ok',
-      );
+  // Someone at an unlocked computer must not be able to make a code of their own.
+  const newCode = () =>
+    attempt(async () => {
+      const pw = await promptDialog({ title: 'New recovery code', label: 'Your password', password: true, ok: 'Continue', hint: 'The old recovery code stops working once the new one is saved.' });
+      if (pw === null) return;
+      if (!(await s.ws.checkPassword(pw))) return toast('Wrong password.', 'error');
+      setSub('recovery');
     });
 
-  const desktop = s.ws.kind === 'desktop';
-  const migrate = () =>
+  const nameComputer = () =>
     attempt(async () => {
-      const ns = await migrateFlow(s.program, s.password);
-      if (ns) onSession(ns);
+      const c = await thisComputer();
+      const name = await promptDialog({
+        title: 'This computer',
+        label: 'Name of this computer',
+        value: c.name,
+        hint: 'Shown on other computers when a client is open here, for example “Office PC” or “Home laptop”.',
+      });
+      if (name === null) return;
+      await nameThisComputer(name);
+      toast('Saved. It is used from the next time Utility Soft is opened.', 'ok');
     });
 
   const item = (label: string, help: string, fn: () => void, disabled = false) => (
@@ -103,24 +118,27 @@ export function UtilityDialog({ s, year, selection, onClose, onCopy, onNextYear,
           {item('Print the index sheet', 'List of clients with S.No. and Bill No.', () => (onClose(), printIndex(s, year!)), !year)}
         </section>
         <section>
-          <h3>Backup</h3>
-          {item('Backup and auto-backup…', 'Back up now, or choose where to back up when exiting.', () => setSub('backup'))}
-          {desktop && item('Data location…', `Currently: ${s.dataLabel}`, () => setSub('data'))}
-          {desktop && item('Check bills for the desktop version', 'Fix bills the Java version could not open. Also runs each time you open Utility Soft.', checkAll)}
+          <h3>Safety</h3>
+          {item('Backups…', 'Back up now, the automatic daily backups, and restoring one.', () => setSub('backup'))}
+          {item('Deleted clients and bills…', 'Put back something deleted in the last 30 days.', () => setSub('bin'))}
+          {item('Problem log', 'What went wrong and when, to send to whoever helps you.', () => setSub('log'))}
         </section>
         <section>
           <h3>Desktop version</h3>
-          {desktop
-            ? item('Move to the new format…', 'Copy everything into a new folder in the web format, checked file by file. This folder is not changed.', migrate)
-            : item('Export for the desktop version…', 'Write everything into a new folder in the desktop (Java) format, and check it.', () => attempt(() => exportFlow(s)))}
-          {!desktop && item('Compare with a desktop folder…', 'List every difference between a desktop folder and this data.', () => attempt(() => compareFlow(s)))}
+          {item('Export for the desktop version…', 'Write everything into a new folder in the desktop (Java) format, and check it.', () => attempt(() => exportFlow(s)))}
+          {item('Compare with a desktop folder…', 'List every difference between a desktop folder and this data.', () => attempt(() => compareFlow(s)))}
         </section>
         <section>
           <h3>Setup</h3>
           {item('Add new tab', 'Add a bill type (like Audit or Tax).', addTab)}
           {item('Edit drop-down lists', 'Entries offered when typing bill fields.', () => setSub('dropdowns'))}
           {item('Letterhead', 'Firm name, address and index-sheet title.', () => setSub('letterhead'))}
+        </section>
+        <section>
+          <h3>Security</h3>
           {item('Change password', 'Password used to open Utility Soft.', () => setSub('password'))}
+          {item('New recovery code…', 'If the saved one is lost: make a new one and save it on your phone.', newCode)}
+          {item('This computer’s name…', 'Shown to others when a client is open here.', nameComputer)}
         </section>
       </div>
       <div class="row">
@@ -131,17 +149,21 @@ export function UtilityDialog({ s, year, selection, onClose, onCopy, onNextYear,
   );
 }
 
-function ChangePasswordDialog({ store, onClose, onDone }: { store: PasswordStore; onClose: () => void; onDone: (password: string) => void }) {
+function ChangePasswordDialog({ ws, onClose, onDone }: { ws: WebBooks; onClose: () => void; onDone: (password: string) => void }) {
   const [old, setOld] = useState('');
   const [a, setA] = useState('');
   const [b, setB] = useState('');
   const [error, setError] = useState<string | null>(null);
   const submit = () =>
     attempt(async () => {
-      if (!(await store.checkPassword(old))) return setError('The old password is wrong.');
       if (a === '') return setError('The new password cannot be empty.');
       if (a !== b) return setError('The two new passwords do not match.');
-      await store.setPassword(a);
+      const done = await busy('Changing…', async () => {
+        if (!(await ws.checkPassword(old))) return false;
+        await ws.setPassword(a);
+        return true;
+      });
+      if (!done) return setError('The old password is wrong.');
       toast('Password changed.', 'ok');
       onDone(a);
     });
@@ -168,47 +190,17 @@ function ChangePasswordDialog({ store, onClose, onDone }: { store: PasswordStore
       {field('New password', a, setA)}
       {field('New password again', b, setB)}
       {error && <p class="warn">{error}</p>}
+      <p class="hint">Backups made before keep opening with the old password (or the recovery code).</p>
     </Modal>
   );
 }
 
-// ---------- folders that the Java program knows by path ----------
+// ---------- backups ----------
 
-const ABSOLUTE = /^([a-zA-Z]:[\\/]|\\\\|\/)/;
-
-/**
- * Turns a chosen folder into the path text stored for the Java program:
- * relative when inside the program folder, otherwise typed by the user.
- */
-async function pathForJava(s: Session, dir: FsDir, what: string, current: string): Promise<string | null> {
-  // The web format only needs a name to show; the folder itself is remembered by the browser.
-  if (s.ws.kind === 'web') return dir.name;
-  const rel = await relativeTo(s.program, dir);
-  if (rel !== null) return rel;
-  return promptDialog({
-    title: `Full path of the ${what}`,
-    label: `Full path of “${dir.name}” on this computer`,
-    value: current && !isRelativePath(current) && current.toLowerCase().endsWith(dir.name.toLowerCase()) ? current : '',
-    hint: (
-      <>
-        The browser cannot see full folder paths. The desktop (Java) version needs it, for example <code>D:\Accounts\{dir.name}</code> or{' '}
-        <code>\\OFFICE-PC\Share\{dir.name}</code>. Copy it from the address bar of File Explorer.
-      </>
-    ),
-    validate: (v) => (ABSOLUTE.test(v.trim()) ? null : 'Enter a full path, starting with a drive letter like D:\\ or with \\\\.'),
-  }).then((v) => (v === null ? null : v.trim()));
-}
-
-/** The folder for a path stored by the Java program, asking for it if needed. */
-async function folderForPath(s: Session, kind: 'data' | 'backup', path: string): Promise<FsDir | null> {
+/** The folder for the backup on exit, asking to select it on a computer that does not know it yet. */
+async function backupFolder(path: string): Promise<FsDir | null> {
   if (!path) return null;
-  if (s.ws.kind === 'desktop' && isRelativePath(path)) {
-    const parts = pathParts(path);
-    let d: FsDir | null = s.program;
-    for (const p of parts) d = d ? await ensureDir(d, p) : null;
-    return d;
-  }
-  const remembered = await rememberedPath(kind, path, true);
+  const remembered = await rememberedPath('backup', path, true);
   if (remembered) return remembered;
   const ok = await confirmDialog({
     title: 'Select the backup folder',
@@ -220,37 +212,94 @@ async function folderForPath(s: Session, kind: 'data' | 'backup', path: string):
     ok: 'Select folder…',
   });
   if (!ok) return null;
-  const dir = await pickFolder('utility-soft-backup', s.program);
-  if (dir) await rememberPath(kind, path, dir);
+  const dir = await pickFolder('utility-soft-backup');
+  if (dir) await rememberPath('backup', path, dir);
   return dir;
 }
 
-/** Automatic backup into <backup folder>\<date+time> (on exit). Returns false if cancelled. */
+/** Backup into <backup folder>\<date+time>, as the desktop version names them (on exit). Returns false if cancelled. */
 export async function autoBackup(s: Session): Promise<boolean> {
   const path = await s.ws.backupPath();
   if (!path) return true;
-  const dir = await folderForPath(s, 'backup', path);
+  const dir = await backupFolder(path);
   if (!dir) return false;
   const r = await busy('Backing up…', async () => {
-    const dest = await ensureDir(dir, backupFolderName(new Date()));
+    const dest = await dir.dir(backupFolderName(new Date()), true);
     let n = 0;
-    await s.ws.backupTo(dest, () => setBusyLabel(`Backing up… ${++n} files`));
+    await makeBackup(s.ws, dest, { onFile: () => setBusyLabel(`Backing up… ${++n} files`) });
+    await pruneBackups(dir);
     toast(`Backed up to ${path}\\${dest.name}.`, 'ok');
     return true;
   });
   return r === true;
 }
 
-function BackupDialog({ s, onClose }: { s: Session; onClose: () => void }) {
+const when = (t: number) => new Date(t).toLocaleString([], { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+/** Shows how a backup differs from now, and restores it if asked. */
+async function compareAndRestore(s: Session, dir: FsDir, label: string, onRestored: () => void): Promise<void> {
+  const broken = await checkBackup(dir);
+  if (broken.length) {
+    toast(`This backup is damaged (${broken.length} file${broken.length === 1 ? '' : 's'}). Choose another one.`, 'error');
+    return;
+  }
+  const report = await busy('Comparing…', () => compare(webSide(openBackup(s.ws, dir)), webSide(s.ws), { onProgress: setBusyLabel, ignoreAutoBackup: true }));
+  if (!report) return;
+  const go = await mountDialog<boolean>((done) => (
+    <Modal
+      title={`Backup of ${label}`}
+      wide
+      onClose={() => done(false)}
+      footer={
+        <>
+          <button onClick={() => done(false)}>Close</button>
+          <button class="danger" disabled={report.ok} onClick={() => done(true)}>
+            Restore this backup…
+          </button>
+        </>
+      }
+    >
+      <p>{report.ok ? 'This backup is the same as the data now.' : 'Differences between the backup and the data now:'}</p>
+      <ReportView report={report} desktopLabel="In the backup" webLabel="Now" />
+    </Modal>
+  ));
+  if (!go) return;
+  const sure = await confirmDialog({
+    title: 'Restore this backup?',
+    message: (
+      <>
+        <p>
+          All bills and clients go back to how they were on <b>{label}</b>.
+        </p>
+        <p class="hint">The data as it is now is backed up first, so this can be undone. The password stays as it is.</p>
+      </>
+    ),
+    ok: 'Restore',
+    danger: true,
+  });
+  if (!sure) return;
+  const ok = await busy('Restoring…', async () => {
+    await restoreBackup(s.ws, dir);
+    return true;
+  });
+  if (ok) {
+    toast(`Restored the backup of ${label}.`, 'ok');
+    onRestored();
+  }
+}
+
+function BackupDialog({ s, onClose, onRestored }: { s: Session; onClose: () => void; onRestored: () => void }) {
   const [path, setPath] = useState<string | null>(null);
   const [linked, setLinked] = useState(false);
   const [prefs, setPrefs] = useState<Prefs | null>(null);
+  const [daily, setDaily] = useState<BackupEntry[] | null>(null);
   const load = () =>
     attempt(async () => {
       const p = await s.ws.backupPath();
       setPath(p);
-      setLinked((s.ws.kind === 'desktop' && isRelativePath(p)) || (await hasRememberedPath('backup', p)));
+      setLinked(await hasRememberedPath('backup', p));
       setPrefs(await loadPrefs());
+      setDaily(await listBackups(await insideBackups(s.ws)));
     });
   useEffect(() => {
     load();
@@ -258,122 +307,171 @@ function BackupDialog({ s, onClose }: { s: Session; onClose: () => void }) {
 
   const backupNow = () =>
     attempt(async () => {
-      const dir = await pickFolder('utility-soft-backup-now', s.program);
+      const dir = await pickFolder('utility-soft-backup-now');
       if (!dir) return;
       await busy('Backing up…', async () => {
+        const dest = (await dir.list()).length === 0 ? dir : await dir.dir(backupFolderName(new Date()), true);
         let n = 0;
-        await s.ws.backupTo(dir, () => setBusyLabel(`Backing up… ${++n} files`));
-        toast(`Backed up ${n} files to ${dir.name}.`, 'ok');
+        await makeBackup(s.ws, dest, { onFile: () => setBusyLabel(`Backing up… ${++n} files`) });
+        toast(`Backed up and checked ${n} files in ${dest.name}.`, 'ok');
       });
     });
 
   const chooseAuto = () =>
     attempt(async () => {
-      const dir = await pickFolder('utility-soft-backup', s.program);
+      const dir = await pickFolder('utility-soft-backup');
       if (!dir) return;
-      const text = await pathForJava(s, dir, 'backup folder', path ?? '');
-      if (text === null) return;
-      if (s.ws.kind === 'web' || !isRelativePath(text)) await rememberPath('backup', text, dir);
-      await s.ws.setBackupPath(text);
+      await rememberPath('backup', dir.name, dir);
+      await s.ws.setBackupPath(dir.name);
       toast('Auto-backup folder saved.', 'ok');
       load();
     });
 
+  const restoreFrom = () =>
+    attempt(async () => {
+      const dir = await pickFolder('utility-soft-restore');
+      if (!dir) return;
+      if (!(await isBackup(dir))) return toast(`“${dir.name}” is not a Utility Soft backup.`, 'error');
+      await compareAndRestore(s, dir, dir.name, () => (onRestored(), onClose()));
+    });
+
   return (
-    <Modal title="Backup" onClose={onClose} footer={<button onClick={onClose}>Close</button>}>
-      <h3>Back up now</h3>
-      <p class="hint">Copies all bills of every year into a folder you choose.</p>
-      <button class="primary" onClick={backupNow}>
-        Back up now…
-      </button>
-      <h3>Auto-backup when exiting</h3>
-      {path === null ? (
+    <Modal title="Backups" onClose={onClose} wide footer={<button onClick={onClose}>Close</button>}>
+      <div class="backup-cols">
+        <section>
+          <h3>Back up now</h3>
+          <p class="hint">Copies everything into a folder you choose, for example on a USB stick, and checks the copy. It stays encrypted.</p>
+          <button class="primary" onClick={backupNow}>
+            Back up now…
+          </button>
+          <h3>Backup when exiting</h3>
+          {path === null ? (
+            <p>Loading…</p>
+          ) : (
+            <>
+              <p>
+                Folder: <b class="path">{path || 'not set'}</b>
+                {path && !linked && <span class="hint"> (you will be asked to select it on this computer)</span>}
+              </p>
+              <div class="row left">
+                <button onClick={chooseAuto}>{path ? 'Change folder…' : 'Choose folder…'}</button>
+                {prefs && (
+                  <label class="check">
+                    <input
+                      type="checkbox"
+                      checked={prefs.askBackupOnExit}
+                      onChange={(e) => {
+                        const p = { ...prefs, askBackupOnExit: (e.target as HTMLInputElement).checked };
+                        setPrefs(p);
+                        savePrefs(p);
+                      }}
+                    />
+                    <span>Ask to back up when I exit (in this browser)</span>
+                  </label>
+                )}
+              </div>
+            </>
+          )}
+        </section>
+        <section>
+          <h3>Automatic backups</h3>
+          <p class="hint">One a day, kept inside the data folder: the last 7 days, 4 weeks and 12 months.</p>
+          {daily === null ? (
+            <p>Loading…</p>
+          ) : daily.length === 0 ? (
+            <p class="hint">None yet.</p>
+          ) : (
+            <ul class="backup-list">
+              {daily.map((b) => (
+                <li key={b.dir.name}>
+                  <span>{when(b.at)}</span>
+                  <button onClick={() => attempt(() => compareAndRestore(s, b.dir, when(b.at), () => (onRestored(), onClose())))}>Compare or restore…</button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <button onClick={restoreFrom}>Restore from a backup folder…</button>
+        </section>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------- the bin ----------
+
+function BinDialog({ ws, onClose }: { ws: WebBooks; onClose: () => void }) {
+  const [list, setList] = useState<BinEntry[] | null>(null);
+  const load = () => attempt(async () => setList(await ws.bin()));
+  useEffect(() => {
+    load();
+  }, []);
+  const restore = (e: BinEntry) =>
+    attempt(async () => {
+      toast(await ws.restore(e), 'ok');
+      load();
+    });
+  return (
+    <Modal title="Deleted clients and bills" onClose={onClose} wide footer={<button onClick={onClose}>Close</button>}>
+      <p class="hint">Kept for 30 days after they were deleted (also when replaced by copying from another year).</p>
+      {list === null ? (
         <p>Loading…</p>
+      ) : list.length === 0 ? (
+        <p>Nothing was deleted in the last 30 days.</p>
       ) : (
-        <>
-          <p>
-            Folder: <b class="path">{path || 'not set'}</b>
-            {path && !linked && <span class="hint"> (you will be asked to select it the first time)</span>}
-          </p>
-          <p class="hint">Each backup goes into a new folder named with the date and time, as in the desktop version.</p>
-          <div class="row left">
-            <button onClick={chooseAuto}>{path ? 'Change folder…' : 'Choose folder…'}</button>
-            {prefs && (
-              <label class="check">
-                <input
-                  type="checkbox"
-                  checked={prefs.askBackupOnExit}
-                  onChange={(e) => {
-                    const p = { ...prefs, askBackupOnExit: (e.target as HTMLInputElement).checked };
-                    setPrefs(p);
-                    savePrefs(p);
-                  }}
-                />
-                <span>Ask to back up when I exit (in this browser)</span>
-              </label>
-            )}
-          </div>
-        </>
+        <ul class="bin-list">
+          {list.map((e) => (
+            <li key={e.file}>
+              <span>
+                {e.kind === 'client' ? (
+                  <>
+                    Client <b>{e.record.name}</b> ({e.year}), {e.record.bills.length} bill{e.record.bills.length === 1 ? '' : 's'}
+                  </>
+                ) : (
+                  <>
+                    Bill <b>{e.bill.name}</b> of {e.clientName} ({e.year}, {e.bill.type})
+                  </>
+                )}
+                <span class="hint"> · deleted {when(e.at)}</span>
+              </span>
+              <button onClick={() => restore(e)}>Restore</button>
+            </li>
+          ))}
+        </ul>
       )}
     </Modal>
   );
 }
 
-function DataLocationDialog({ s, onClose, onSession }: { s: Session; onClose: () => void; onSession: (s: Session) => void }) {
-  const change = () =>
+// ---------- problem log ----------
+
+function LogDialog({ ws, onClose }: { ws: WebBooks; onClose: () => void }) {
+  const [text, setText] = useState<string | null>(null);
+  useEffect(() => {
+    attempt(async () => setText(await ws.logText()));
+  }, []);
+  const copy = () =>
     attempt(async () => {
-      const dir = await pickFolder('utility-soft-data', s.program);
-      if (!dir) return;
-      if (!(await looksLikeData(dir))) {
-        const ok = await confirmDialog({
-          title: 'No bills in this folder',
-          message: (
-            <p>
-              <b>{dir.name}</b> has no <code>bills</code> folder. Use it anyway and start with no bills there?
-            </p>
-          ),
-          ok: 'Use this folder',
-        });
-        if (!ok) return;
-      }
-      const text = await pathForJava(s, dir, 'data folder', '');
-      if (text === null) return;
-      await prepareDataFolder(dir);
-      if (isRelativePath(text)) {
-        await writeDataPath(s.program, text.toLowerCase() === 'data' ? '' : text);
-      } else {
-        await rememberPath('data', text, dir);
-        await writeDataPath(s.program, text);
-      }
-      const label = isRelativePath(text) ? `${s.program.name}\\${text}` : text;
-      toast(`Data is now loaded from ${label}.`, 'ok');
-      onSession(await openSession(s.program, dir, label, s.password));
-    });
-  const useDefault = () =>
-    attempt(async () => {
-      const dir = await walk(s.program, ['data']);
-      const data = dir ?? (await ensureDir(s.program, 'data'));
-      await prepareDataFolder(data);
-      await writeDataPath(s.program, '');
-      const label = `${s.program.name}\\data`;
-      toast(`Data is now loaded from ${label}.`, 'ok');
-      onSession(await openSession(s.program, data, label, s.password));
+      await navigator.clipboard.writeText(text ?? '');
+      toast('Copied. Paste it into an email or message.', 'ok');
     });
   return (
-    <Modal title="Data location" onClose={onClose} footer={<button onClick={onClose}>Close</button>}>
-      <p>
-        Bills are loaded from <b class="path">{s.dataLabel}</b>.
-      </p>
-      <p class="hint">
-        Choose another folder to work on bills kept elsewhere, for example a shared folder on the office computer. The desktop version uses the same
-        setting.
-      </p>
-      <div class="row left">
-        <button class="primary" onClick={change}>
-          Choose data folder…
-        </button>
-        <button onClick={useDefault}>Use the “data” folder inside {s.program.name}</button>
-      </div>
+    <Modal
+      title="Problem log"
+      onClose={onClose}
+      wide
+      footer={
+        <>
+          <button onClick={copy} disabled={!text}>
+            Copy
+          </button>
+          <button class="primary" onClick={onClose}>
+            Close
+          </button>
+        </>
+      }
+    >
+      <p class="hint">Problems on every computer using this data, newest last. It is kept encrypted with the rest.</p>
+      {text === null ? <p>Loading…</p> : text === '' ? <p>No problems so far.</p> : <pre class="log">{text}</pre>}
     </Modal>
   );
 }

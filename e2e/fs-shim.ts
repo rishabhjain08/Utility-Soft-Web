@@ -53,7 +53,7 @@ export class FolderPicker {
         }
       }
       case 'read':
-        return readFileSync(a).toString('base64');
+        return [readFileSync(a).toString('base64'), statSync(a).mtimeMs];
       case 'write':
         writeFileSync(a, Buffer.from(data ?? '', 'base64'));
         return true;
@@ -85,7 +85,7 @@ const shimSource = `(() => {
   const base = (p) => p.split('/').filter(Boolean).pop() || p;
   class FileH {
     constructor(path) { this.path = path; this.name = base(path); this.kind = 'file'; }
-    async getFile() { const data = unb64(await rpc('read', this.path)); return new File([data], this.name); }
+    async getFile() { const [b, mtime] = await rpc('read', this.path); return new File([unb64(b)], this.name, { lastModified: Math.floor(mtime) }); }
     async createWritable() {
       const path = this.path; const parts = [];
       return {

@@ -1345,9 +1345,6 @@ table.clients td {
 .notice p {
   margin: 0 0 8px;
 }
-.format-badge {
-  color: var(--warn-ink);
-}
 .report-ok,
 .report-bad {
   display: flex;
@@ -1396,4 +1393,123 @@ table.clients td {
   position: sticky;
   top: 0;
   background: var(--ledger-soft);
+}
+
+/* ---------- recovery code ---------- */
+
+.card.recovery-card {
+  width: min(860px, 100%);
+}
+.recovery {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 28px;
+  align-items: start;
+  margin: 8px 0 12px;
+}
+.qr-box {
+  text-align: center;
+}
+.qr svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: #fff;
+  border: 1px solid var(--rule);
+}
+.code-text {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  word-break: break-all;
+  background: var(--ledger-soft);
+  padding: 6px 8px;
+}
+.steps {
+  margin: 0;
+  padding-left: 22px;
+  display: grid;
+  gap: 10px;
+}
+.steps .hint {
+  display: block;
+}
+.field.check-code input {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  width: 9em;
+}
+button.link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--ledger);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.backdrop.full {
+  background: var(--desk);
+  overflow: auto;
+}
+@media (max-width: 720px) {
+  .recovery {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------- safety ---------- */
+
+.problems {
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+  border-bottom: 1px solid #d9a441;
+  padding: 6px 16px;
+}
+.problems p {
+  margin: 4px 0;
+}
+.backup-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 28px;
+}
+.backup-list,
+.bin-list,
+.version-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 12px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  max-height: 46vh;
+  overflow: auto;
+}
+.backup-list li,
+.bin-list li,
+.version-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--rule);
+}
+.backup-list li:last-child,
+.bin-list li:last-child,
+.version-list li:last-child {
+  border-bottom: none;
+}
+pre.log {
+  max-height: 50vh;
+  overflow: auto;
+  font-size: 12px;
+  white-space: pre-wrap;
+  background: var(--ledger-soft);
+  padding: 8px;
+}
+@media (max-width: 720px) {
+  .backup-cols {
+    grid-template-columns: 1fr;
+  }
 }

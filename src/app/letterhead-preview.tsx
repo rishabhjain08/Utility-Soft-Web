@@ -1,7 +1,7 @@
 // Live preview of the letterhead on a sample bill and index sheet, with made-up content.
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { Letterhead } from '../core/config';
-import { dateString } from '../core/workspace';
+import { dateString } from '../core/util';
 import { financialYearOf } from '../core/years';
 import { BillCopy, IndexSheetView, PrintableBill } from './print';
 
@@ -12,6 +12,7 @@ export const SAMPLE = {
   address: ['12, Station Road', 'Jaipur 302001', 'Phone 0141 2345678'],
   firm: ['For Sharma & Associates', '', 'Chartered Accountants'],
   titles: ['Index of Bills', 'Financial Year ##'],
+  // (## stands for the year shown.)
 };
 
 const YEAR = financialYearOf(new Date());
@@ -37,7 +38,7 @@ const SAMPLE_CLIENTS = [
 // A4 width at 96 px/inch.
 const PAGE_WIDTH = (210 / 25.4) * 96;
 
-export function LetterheadPreview({ letterhead, focus }: { letterhead: Letterhead; focus: LetterheadPart | null }) {
+export function LetterheadPreview({ letterhead, focus, year = YEAR }: { letterhead: Letterhead; focus: LetterheadPart | null; year?: string }) {
   const [view, setView] = useState<'bill' | 'index'>('bill');
   const [shownFor, setShownFor] = useState<LetterheadPart | null>(null);
   // Follow the field being typed in: the titles are on the index sheet, the rest on bills.
@@ -69,7 +70,7 @@ export function LetterheadPreview({ letterhead, focus }: { letterhead: Letterhea
     firmName: ph.firm ? SAMPLE.firm : letterhead.firmName,
     indexTitles: letterhead.indexTitles,
   };
-  const titles = (ph.titles ? SAMPLE.titles : letterhead.indexTitles).map((t) => t.split('##').join(YEAR));
+  const titles = (ph.titles ? SAMPLE.titles : letterhead.indexTitles).map((t) => t.split('##').join(year));
   const cls = [
     'lp',
     focus ? `hl-${focus}` : '',

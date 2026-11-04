@@ -1,5 +1,6 @@
 import { BillType } from '../core/config';
-import { Client, dateString } from '../core/workspace';
+import { Client } from '../core/webstore';
+import { dateString } from '../core/util';
 import { Session } from './session';
 import { PrintableBill, printJob } from './print';
 import { busy, promptDialog, toast } from './ui';

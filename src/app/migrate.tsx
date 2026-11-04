@@ -9,10 +9,9 @@ import { decodePlainLines } from '../core/codec';
 import { readPassword } from '../core/config';
 import { DesktopFolders, exportToDesktop, isInside, migrateDesktop } from '../core/migrate';
 import { VerifyReport, verify } from '../core/verify';
-import { WebBooks } from '../core/webstore';
-import { LOCKS } from '../core/workspace';
+import { LOCKS } from '../core/desktop';
 import { ensurePermission, migrationOf, pickFolder, rememberMigration, rememberPath, rememberProgram } from './folders';
-import { Session, findDesktopData, inspectProgram, openWebSession } from './session';
+import { Session, findDesktopData, inspectProgram, openWebSession, thisComputer, unlock } from './session';
 import { Modal, attempt, busy, confirmDialog, mountDialog, promptDialog, setBusyLabel, toast } from './ui';
 
 // ---------- choosing where a new folder goes ----------
@@ -195,6 +194,7 @@ async function openInDesktop(data: FsDir | null): Promise<string[]> {
  * the copy. Returns the session on the copy when the user opens it.
  */
 export async function migrateFlow(program: FsDir, password: string): Promise<Session | null> {
+  // A desktop folder without pass.txt: the password chosen for the copy is used.
   const src = await desktopFolders(program);
   if (!src) return null;
   const open = await openInDesktop(src.data);
@@ -223,14 +223,21 @@ export async function migrateFlow(program: FsDir, password: string): Promise<Ses
     outside: [program, ...(src.data ? [src.data] : [])],
   });
   if (!dest) return null;
-  const result = await busy('Copying…', () => migrateDesktop(src, dest, setBusyLabel));
+  const result = await busy('Copying…', () => migrateDesktop(src, dest, { password, onProgress: setBusyLabel }));
   if (!result) return null;
   const go = await reportDialog({
     title: result.report.ok ? 'Copy made and checked' : 'The copy does not match',
     intro: result.report.ok ? (
-      <p>
-        Your bills are now also in <b>{dest.name}</b>, in the web format. <b>{program.name}</b> was not changed.
-      </p>
+      <>
+        <p>
+          Your bills are now also in <b>{dest.name}</b>, in the web format, encrypted: nobody can read them without the password. <b>{program.name}</b>{' '}
+          was not changed.
+        </p>
+        <p class="warn">
+          The desktop folder <b>{program.name}</b> is not encrypted: anyone using this computer can read it. Once you have checked your bills in the
+          copy, move it to a USB stick kept somewhere safe, or delete it.
+        </p>
+      </>
     ) : (
       <p class="warn">
         The copy in <b>{dest.name}</b> is different from <b>{program.name}</b>. Nothing was changed in {program.name}. Please keep using it and
@@ -246,17 +253,16 @@ export async function migrateFlow(program: FsDir, password: string): Promise<Ses
   if (!go) return null;
   await rememberProgram(dest);
   toast(`Opened ${dest.name}. From now on, use Utility Soft on this folder.`, 'ok');
-  return openWebSession(dest, password);
+  return openWebSession(result.books.as({ computer: await thisComputer() }), password);
 }
 
-/** After the password of a desktop folder: move to the web format, or keep using the desktop files. */
+/** After the password of a desktop folder: the one-time move to the web format. */
 export function DesktopChoice({
-  program, password, onMigrated, onKeep, onOpenCopy, onBack,
+  program, password, onMigrated, onOpenCopy, onBack,
 }: {
   program: FsDir;
   password: string;
   onMigrated: (s: Session) => void;
-  onKeep: () => void;
   onOpenCopy: (dir: FsaDir) => void;
   onBack: () => void;
 }) {
@@ -289,19 +295,15 @@ export function DesktopChoice({
           </div>
         )}
         <p>
-          Utility Soft now keeps your bills in its own format, which allows new features. Moving is done once: the app makes a copy in a new folder
+          Utility Soft keeps your bills in its own format, encrypted with your password. Moving is done once: the app makes a copy in a new folder
           and checks every bill, client and setting against this one. <b>This folder is not changed.</b>
         </p>
         <button class={copied ? 'big' : 'primary big'} onClick={migrate}>
           {copied ? 'Make a new copy…' : 'Make a copy in the new format…'}
         </button>
-        <button class="big" onClick={onKeep}>
-          Keep using the desktop files
-        </button>
         <p class="hint">
-          After moving, use the web app on the copy. Bills entered in the desktop version afterwards are not in the copy; to go back to the
-          desktop version, use Utility ▸ <i>Export for the desktop version</i>. Keeping the desktop files works as before, side by side with
-          the desktop version.
+          After moving, use the web app on the copy. Bills entered in the desktop version afterwards are not in the copy. To go back to the desktop
+          version, use Utility ▸ <i>Export for the desktop version</i>.
         </p>
         <div class="row">
           <button onClick={onBack}>Back</button>
@@ -314,20 +316,23 @@ export function DesktopChoice({
 // ---------- export ----------
 
 export async function exportFlow(s: Session): Promise<void> {
-  if (s.ws.kind !== 'web') return;
   const web = s.ws;
   const ok = await confirmDialog({
     title: 'Export for the desktop version',
     message: (
       <>
         <p>Writes all bills, clients and settings into a new folder in the desktop (Java) version's format, and checks it.</p>
+        <p class="warn">
+          The desktop version cannot read encrypted files, so the export is <b>not encrypted</b>: anyone using this computer can read it. Put it on a
+          USB stick, or delete it when you no longer need it.
+        </p>
         <p class="hint">The web data is not changed. Bills entered in the desktop version afterwards are not in the web data.</p>
       </>
     ),
     ok: 'Choose a folder…',
   });
   if (!ok) return;
-  const dest = await chooseNewFolder({ id: 'utility-soft-export', title: 'Where should the export go?', suggestion: 'Utility Soft for desktop', outside: [s.program] });
+  const dest = await chooseNewFolder({ id: 'utility-soft-export', title: 'Where should the export go?', suggestion: 'Utility Soft for desktop', outside: [s.root] });
   if (!dest) return;
   const r = await busy('Exporting…', () => exportToDesktop(web, dest, s.password, setBusyLabel));
   if (!r) return;
@@ -350,7 +355,6 @@ export async function exportFlow(s: Session): Promise<void> {
 // ---------- compare ----------
 
 export async function compareFlow(s: Session): Promise<void> {
-  if (s.ws.kind !== 'web') return;
   const web = s.ws;
   const program = await pickFolder('utility-soft-program');
   if (!program) return;
@@ -383,7 +387,7 @@ export async function compareFlow(s: Session): Promise<void> {
   });
 }
 
-/** The web copy as a session, after its password check (same password as the desktop folder it came from). */
+/** The web copy as a session, when it still has the same password as the desktop folder it came from. */
 export async function openCopy(dir: FsaDir, password: string): Promise<Session | null> {
   if (!(await ensurePermission(dir.handle, true))) return null;
   const info = await inspectProgram(dir);
@@ -391,8 +395,9 @@ export async function openCopy(dir: FsaDir, password: string): Promise<Session |
     toast(`“${dir.name}” is no longer a Utility Soft data folder.`, 'error');
     return null;
   }
-  if (!(await new WebBooks(dir).checkPassword(password))) return null;
+  const ws = await unlock(dir, password);
+  if (!ws) return null;
   await rememberProgram(dir);
   toast(`Opened ${dir.name}.`, 'ok');
-  return openWebSession(dir, password);
+  return openWebSession(ws, password);
 }

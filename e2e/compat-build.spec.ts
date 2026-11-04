@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { FIXTURES, expectClients, exportTo, gridRows, login, migrateTo, start, waitSaved } from './helpers';
 
 const TMP = join(import.meta.dirname, '..', '.tmp');
-export const COMPAT_WEB = join(TMP, 'compat-web');
 
 async function cell(page: Page, row: number, col: 'desc' | 'amount', text: string) {
   const el = page.locator(`.grid [data-row="${row}"][data-col="${col}"]`);
@@ -21,30 +20,23 @@ const fresh = (dir: string) => {
   return dir;
 };
 
-test('build data with the web app on the desktop files', async ({ page }) => {
-  cpSync(join(FIXTURES, 'java-sample'), fresh(COMPAT_WEB), { recursive: true });
-  const picker = await start(page);
-  await login(page, picker, COMPAT_WEB);
-  await journey(page);
-});
-
-// The same in the web format: moved from the desktop files, then exported for the desktop version.
+// Moved from the desktop files to the web format, changed there, then exported for the desktop version.
 test('build data in the web format and export it', async ({ page }) => {
   const src = join(TMP, 'compat-src');
   cpSync(join(FIXTURES, 'java-sample'), fresh(src), { recursive: true });
   const picker = await start(page);
-  await login(page, picker, src, 'puja', false);
+  await login(page, picker, src);
   await migrateTo(page, picker, fresh(join(TMP, 'compat-webstore')));
   await journey(page);
   await exportTo(page, picker, fresh(join(TMP, 'compat-export')));
 });
 
 async function journey(page: Page) {
-  await page.getByRole('button', { name: 'Utility…' }).click();
+  await page.getByRole('button', { name: 'Utility…', exact: true }).click();
   await page.getByRole('button', { name: /Letterhead/ }).click();
   await page.getByLabel(/Address and other lines/).fill('12, Gandhi Road\nNew Delhi - 110001');
   await page.getByLabel(/Firm name and signature/).fill('For JAIN & ASSOCIATES\nChartered Accountants\n\n(Proprietor)');
-  await page.getByLabel('Index sheet title line 1').fill('INDEX OF BILLS FOR THE YEAR ##');
+  await page.getByLabel('Index sheet title line 1').fill('INDEX OF BILLS FOR THE YEAR 06-07');
   await page.getByRole('button', { name: 'Save' }).click();
 
   const add = async (name: string, late = false) => {
@@ -101,10 +93,10 @@ async function journey(page: Page) {
   await expectClients(page, ['1|AMIT KUMAR|101-102', '2|PREM|', '2A|PRIYA|', '3|RISHABH|']);
 
   // Next year and copy everyone forward.
-  await page.getByRole('button', { name: 'Utility…' }).click();
+  await page.getByRole('button', { name: 'Utility…', exact: true }).click();
   await page.getByRole('button', { name: /Add next year/ }).click();
   await page.getByRole('button', { name: 'Add 07-08' }).click();
-  await page.getByRole('button', { name: 'Utility…' }).click();
+  await page.getByRole('button', { name: 'Utility…', exact: true }).click();
   await page.getByRole('button', { name: /Copy clients to another year/ }).click();
   await page.getByRole('button', { name: 'Copy 4' }).click();
   await expect(page.getByRole('combobox', { name: 'Year' })).toHaveValue('07-08');
@@ -124,11 +116,11 @@ async function journey(page: Page) {
   await page.getByRole('button', { name: '← Done' }).click();
 
   // A new tab and its drop-down list.
-  await page.getByRole('button', { name: 'Utility…' }).click();
+  await page.getByRole('button', { name: 'Utility…', exact: true }).click();
   await page.getByRole('button', { name: /Add new tab/ }).click();
   await page.getByLabel('Tab name').fill('GST');
   await page.getByRole('button', { name: 'OK' }).click();
-  await page.getByRole('button', { name: 'Utility…' }).click();
+  await page.getByRole('button', { name: 'Utility…', exact: true }).click();
   await page.getByRole('button', { name: /Edit drop-down lists/ }).click();
   const dd = page.getByRole('dialog', { name: 'Edit drop-down lists' });
   await dd.getByRole('tab', { name: 'GST' }).click();

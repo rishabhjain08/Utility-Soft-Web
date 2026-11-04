@@ -1,167 +1,199 @@
 # Utility Soft data format (web)
 
-The web app keeps its data in one folder of plain JSON files. It replaces the
-desktop (Java) layout. That layout can still be read (*Move to the new format*,
-*Compare*) and written (*Export for the desktop version*). The web app can also
-still work directly on desktop files if you choose to.
+The web app keeps its data in one folder. Every file in it is encrypted except
+`utility-soft.json`. Without the password or the recovery code, nobody can read
+anything there, not even client names. It replaces the desktop (Java) layout.
+That layout can still be read (*Move to the new format*, *Compare*) and written
+(*Export for the desktop version*).
 
 ```
 <folder>/
-  utility-soft.json              settings
+  utility-soft.json              format, version, and the data key locked by the password and by the recovery code
+  settings.dat                   letterhead, tabs, drop-down lists, auto-backup folder
   years/
     06-07/
-      k3j9x0q2ma.json            one client in one year
-      …
+      k3j9x0q2ma.dat             one client in one year
     07-08/
-      k3j9x0q2ma.json            the same client the next year (same id)
-  open/
-    07-08 MOHAN.lock             a client open on a computer right now
-  desktop-extras/                files of the desktop data folder the app does not use, kept as they were
-    bills/06-07/MOHAN/letter.doc
+      k3j9x0q2ma.dat             the same client the next year (same id)
+  open/<hash>.lock               a client open on a computer right now
+  journal/<time>-<id>.dat        a change of several files, while it is being made
+  history/<path>/<time>.dat      earlier versions of each client file and of the settings
+  bin/<time>-<id>.dat            deleted clients and bills, kept 30 days
+  extras/<id>.dat                files of the desktop data folder the app does not use
+  backups/<date time>/           automatic daily backups
+  logs/<month> <computer>.dat    problems, for support
 ```
+
+## Encryption
+
+- **One data key encrypts every file.** It is a random 256-bit AES-GCM key.
+- **The key is stored only locked**, in `utility-soft.json`, in two ways:
+  - by the password, through PBKDF2-SHA256 with 600,000 rounds;
+  - by the recovery code (24 characters, 120 random bits).
+- **Changing the password re-locks the key only.** Nothing else is re-encrypted,
+  and old backups still open with the old password or the recovery code.
+- **The recovery code is shown once**, as a QR code, with steps to save it on a
+  phone (Google Keep). The app does not go on until a part of it is typed back.
+  Until then, `utility-soft.json` says `recoverySaved: false` and the app asks
+  again. Utility ▸ *New recovery code* makes a new one; it needs the password,
+  and the old code stops working only once the new one is saved.
+- **Each encrypted file** is `USW1` + a 12-byte IV + the AES-GCM ciphertext and
+  tag. The file's path inside the folder is authenticated with it, so files
+  cannot be swapped or changed unnoticed: a changed file is reported as damaged.
+- **File names reveal nothing.** Clients are files named by a random id.
+  Open-client files are named by a keyed hash of year and name. Kept desktop
+  files are blobs whose real paths are in the encrypted settings.
+- **The app locks itself after 15 minutes without use**, and asks for the
+  password again.
+- **What is not encrypted:** an export for the desktop version, because the Java
+  program cannot read encrypted files. The desktop folder a copy was made from is
+  not encrypted either. The app says so and suggests a USB stick or deleting it.
 
 ## Why it is shaped like this
 
-- **One file per client and year.** The client list of a year reads one small
-  file per client; the desktop layout needed a folder per client plus two files
-  for S.No. and Bill No., and a file per bill. A client's bills are saved
-  together, so one save cannot leave it half-written. A file is replaced in one
-  step: the browser writes a temporary copy and swaps it in.
-- **A client keeps its id from year to year.** Earlier years are found by id,
-  not by name. A client renamed this year still shows last year's amounts, and
-  its new bills start from last year's rows. In the desktop layout this link was
-  lost on renaming. Each year keeps its own name, S.No. and Bill No., as before,
-  so old index sheets stay as they were printed.
-- **Groups are explicit.** A bill is a list of groups, and each group is a list
-  of rows. The desktop version marked a new group with a `New Name` row (written
-  `New Name,New`, `New Name,` or `New Name,0`).
-- **No workarounds for the desktop version.** The trailing spaces that stop the
-  Java program from failing on some bills (`protectForJava`) are not stored.
-  They are added again on export.
-- **A real password hash.** The password is stored as PBKDF2-SHA256 (100,000
-  rounds, random salt), not shifted characters. The bills themselves are plain
-  JSON, readable in any text editor.
+- **One file per client and year.** A client's name, S.No., Bill No. and all its
+  bills change together and can be read in one go. A file is replaced in one step:
+  the browser writes a temporary copy and swaps it in.
+- **A client keeps its id from year to year, and so does a bill.** Earlier years
+  are found by id, not by name. A client or bill renamed this year still shows
+  last year's amounts, and its new bills start from last year's rows. Each year
+  keeps its own name, S.No. and Bill No., so old index sheets stay as they were
+  printed.
+- **Changes of several files are safe.** Adding or removing a client renumbers
+  the others. Such a change first writes the journal, then the files. If the
+  computer stops half way, the next opening (by any computer) finishes it. Files
+  changed again since then are left as they are, because that change is newer.
+- **Earlier versions.** Before a client file or the settings change, the previous
+  version is kept: at most one every 10 minutes while editing, always before a
+  delete, 30 per file. They give *Earlier versions of the bill*, and a way back
+  for a damaged file. Routine S.No. renumbering keeps no versions.
+- **The bin.** Deleted clients and bills, and clients replaced by *Copy clients
+  to another year*, are kept for 30 days and can be put back.
+- **Conflicts are caught.** The editor remembers each bill as it read it. A save
+  that finds the bill changed on another computer stops and asks which version
+  to keep. The other one stays as an earlier version.
+- **Open clients name the computer.** An open-client file says which computer
+  (named in Utility) and since when. It is renewed every minute, and is ignored
+  after 5 minutes without renewal, so a computer that stopped does not block
+  anyone. Each lock is its own file, so two computers never write the same one.
+- **Cheap to check for changes.** Client files are read again only when their
+  size or modification time changes, so the list can be refreshed often.
+- **Amounts are whole numbers.** `amount` is a number, or `null` when empty.
+  Amounts the desktop version stored that are not plain whole numbers (`12a`,
+  `007`) are kept exactly in `raw`. The editor marks them, and they do not count
+  in totals, as in the desktop version.
+- **Years are written out.** Bill rows, drop-down entries and the index title are
+  shown and typed with the year written out, such as "Assessment Year 26-27".
+  They are stored with `##` in its place, so that in other years they show that
+  year. Nobody has to type `##`.
 - **The same rules for names and text as the desktop layout.** For example, no
   `\ / : * ? " < > |` in names, and no `%` in the letterhead. This is why every
-  web folder can be exported back without losing anything.
-- **Open clients are one file each.** Two computers opening different clients
-  never write the same file. In the desktop layout they shared
-  `activelocation.txt`.
-- **A version number.** `format` and `version` in `utility-soft.json` let a later
-  app upgrade old folders. They also let an older app refuse a newer folder
-  instead of misreading it.
+  folder can be exported back without losing anything.
+- **A version number.** A folder from a newer app is refused rather than misread.
 
-## utility-soft.json
+## Contents (after decryption)
+
+`settings.dat`:
 
 ```json
 {
-  "format": "utility-soft",
-  "version": 1,
-  "password": { "kdf": "PBKDF2-SHA256", "iterations": 100000, "salt": "…", "hash": "…" },
-  "letterhead": {
-    "firmName": ["For JAIN & CO.", "Chartered Accountants"],
-    "firmAddress": ["12, Gandhi Road", "New Delhi"],
-    "indexTitles": ["INDEX OF BILLS ##", "", ""]
-  },
-  "billTypes": [{ "folder": "Audit", "tab": "Audit" }, { "folder": "Vat", "tab": "Vat" }],
+  "letterhead": { "firmName": ["For JAIN & CO."], "firmAddress": ["12, Gandhi Road"], "indexTitles": ["INDEX OF BILLS ##", "", ""] },
+  "billTypes": [{ "folder": "Audit", "tab": "Audit" }],
   "dropdowns": [{ "tab": "Audit", "items": ["Fee for Tax Audit for the Assessment Year ##", "Expenses"] }],
-  "autoBackup": "D:\\Backups",
-  "desktop": { "impinfoExtra": [], "extras": ["bills/06-07/MOHAN/letter.doc"] },
-  "migratedFrom": { "at": "2026-11-03T18:30:00.000Z", "folder": "Utility Soft", "data": "Utility Soft\\data" }
+  "autoBackup": "Backups",
+  "desktop": { "impinfoExtra": [], "extras": ["bills/06-07/MOHAN/letter.doc"], "files": [{ "path": "bills/06-07/MOHAN/letter.doc", "blob": "q8…" }] },
+  "migratedFrom": { "at": "2026-11-04T10:00:00.000Z", "folder": "Utility Soft", "data": "Utility Soft\\data" }
 }
 ```
 
-- `letterhead` is `null` until it is filled in; the first run asks for it.
-- `billTypes`: `tab` is the title shown; `folder` is the folder name in the
-  desktop layout, which bills refer to as their `type`.
-- `dropdowns` are the lines of the desktop `ddown.txt`. `##` stands for the year.
-- `desktop` holds what only the desktop version uses, so that exporting gives it
-  back: `impinfo.txt` lines after the letterhead, and the paths of the files in
-  `desktop-extras`.
-
-## years/&lt;YY-YY&gt;/&lt;id&gt;.json
+`years/<YY-YY>/<id>.dat`:
 
 ```json
 {
-  "id": "k3j9x0q2ma",
-  "name": "MOHAN",
-  "serial": "1A",
-  "billNo": "12-14",
+  "v": 1, "id": "k3j9x0q2ma", "name": "MOHAN", "serial": "1A", "billNo": "12-14",
   "bills": [
-    {
-      "type": "Vat",
-      "name": "VAT AUDIT",
+    { "id": "b1x9…", "type": "Vat", "name": "VAT AUDIT",
       "groups": [
-        { "rows": [{ "text": "Fee for VAT Audit for the Assessment Year ##", "amount": "700" }, { "text": "Expenses", "amount": "50" }] },
-        { "rows": [{ "text": "Fee for IT Return", "amount": "1200" }] }
-      ]
-    }
+        { "rows": [{ "text": "Fee for VAT Audit for the Assessment Year ##", "amount": 700 }, { "text": "Expenses", "amount": 50 }] },
+        { "rows": [{ "text": "Fee for IT Return", "amount": 1200 }] }
+      ] }
   ]
 }
 ```
 
-- A year exists when its folder exists, even if it is empty.
-- `serial`, `billNo` and `amount` are text, kept exactly as entered, so nothing
-  is lost from the desktop data. For example, `5A` is a valid S.No., and
-  amounts the desktop version stored are kept even when they are not numbers.
-- `##` in a row's text stands for the bill's own year. When a bill is carried
-  forward, it shows the new year.
+- A year exists when its folder exists, even if empty.
+- Groups are rows printed together with their own subtotal. The desktop version
+  separates them with `New Name` rows.
+- `##` stands for the bill's own year.
+
+## Backups
+
+A backup is a folder holding copies of the encrypted data files, plus
+`utility-soft.json` and `backup.json`. The last lists a SHA-256 of every file,
+so a damaged backup is noticed before it is used. A backup opens like the
+original, with the password or the recovery code of its time.
+
+- **Automatically:** one a day, inside the data folder, when the app is opened.
+  It keeps the newest of each of the last 7 days, 4 weeks and 12 months.
+- **When exiting:** into the chosen folder (as the desktop version does), with the
+  same kind of thinning.
+- **Back up now:** into any folder, such as a USB stick.
+- **Restoring:** the app shows what differs, then backs up the current data
+  first, so a restore can be undone. It keeps the password and this computer's
+  auto-backup folder.
 
 ## Moving from the desktop layout (migration)
 
 *Open Utility Soft folder* on a desktop folder, then the password, then *Make a
-copy in the new format*. It is also under Utility ▸ *Move to the new format*.
+copy in the new format*.
 
-- The copy always goes into a new or empty folder, never inside the desktop
-  program or data folder. The desktop folders are opened read-only: any attempt
-  to write there fails (`readOnly` in `src/core/fs.ts`). The tests check that
-  every file and modified time is unchanged afterwards.
-- These become the format above: clients, S.No., Bill No., bills, letterhead,
-  tabs (including tabs lost from `impinfo.txt`, recovered from the folders),
-  drop-down lists, the auto-backup folder and the password.
-- Every other file or folder in the data folder is copied byte for byte into
-  `desktop-extras`. This includes notes, scans, the Java program's temporary
-  `1q2m.txt`, and folders of tabs that no longer exist.
-- `activelocation.txt` is not copied, because it only lists clients open at the
-  time. If any are open, the app warns first.
-- `utility-soft.json` is written last, so a copy that stopped half way cannot be
-  opened.
+- **Where the copy goes:** always into a new or empty folder, never inside the
+  desktop program or data folder.
+- **The desktop folders are only read.** Any attempt to write there fails
+  (`readOnly` in `src/core/fs.ts`). Tests check that every file and modification
+  time is unchanged afterwards. A desktop folder without `pass.txt` gets a
+  password for the copy; nothing is written to the folder.
+- **What carries over:** clients, S.No., Bill No., bills, letterhead, tabs
+  (including tabs lost from `impinfo.txt`, recovered from the folders), drop-down
+  lists, the auto-backup folder and the password.
+- **Other files** in the data folder are kept byte for byte, encrypted.
+- **Clients open in the desktop version:** the app warns first.
+- **Written last:** `utility-soft.json`, so a copy that stopped half way cannot
+  be opened.
 
 ## Verification
 
-After a migration or an export, the app compares the two folders and lists
-every difference. The same check is available any time as Utility ▸ *Compare
-with a desktop folder*, for example to see what was entered in the desktop
-version after moving.
+After a move or an export, the app compares the two and lists every difference.
+Utility ▸ *Compare with a desktop folder* does the same at any time. Each backup
+can also be compared with the data now.
 
-- The desktop side is read the way the web app reads desktop files, and the web
-  side the way it reads its own. So the check compares what each one shows.
-- It compares:
-  - the password (by its hash), tabs, letterhead, drop-down lists and auto-backup folder;
+- **How each side is read:** the desktop side the way the Java program reads it,
+  the web side through the app. So what is compared is what each one shows.
+- **What is compared:**
+  - the password, tabs, letterhead, drop-down lists and auto-backup folder;
   - every year;
   - every client, with its S.No. and Bill No.;
-  - every bill, row by row.
-- Two things do not count as differences:
+  - every bill, row by row;
+  - every other file, byte for byte.
+- **Not counted as differences:**
   - trailing spaces on a row's text;
-  - how a new group is marked. The report says how many rows this applies to.
-- Every file of the desktop data folder that is not one of the above must be
-  in `desktop-extras` with the same bytes. Every file there must still be in
-  the desktop folder.
+  - how a new group is marked.
+
+  The report says how many rows this applies to.
 
 ## Export for the desktop version
 
 Utility ▸ *Export for the desktop version* writes a complete desktop program
 folder into a new folder:
 
-- `pass.txt`, `impinfo.txt`, `ddown.txt`, `backupto.txt` and an empty `loaddatafrom.txt`;
-- `data\activelocation.txt` (empty);
-- `data\bills\<year>\<client>\…`, with the kept files put back where they were.
+- `pass.txt`, `impinfo.txt`, `ddown.txt`, `backupto.txt` and `loaddatafrom.txt`;
+- `data\activelocation.txt` and `data\bills\…`;
+- the kept files, back where they were.
 
 - Rows the Java program could not open get their trailing spaces back.
-- Kept files whose client was deleted or renamed go into `Other files` next to
-  `data`, so that no stray client folder appears.
-- The export is then compared with the web data like a migration.
-- To run the desktop version on it, copy `billing.jar` and its `lib` folder into
-  the export.
+- Kept files of a deleted or renamed client go into `Other files`.
+- The export is then checked.
+- To use it, copy `billing.jar` and its `lib` folder into it.
+- The export is not encrypted.
 
 The real Java program is tested on such exports by `compat/check_web_to_java.py`.

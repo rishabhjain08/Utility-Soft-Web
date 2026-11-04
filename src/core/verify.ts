@@ -1,23 +1,26 @@
-// Compares a desktop (Java) folder with a web-format folder and lists every
-// difference: settings, years, clients (S.No., Bill No.), bills row by row,
-// and the other files of the data folder byte for byte.
+// Compares two sets of Utility Soft data and lists every difference: settings,
+// years, clients (S.No., Bill No.), bills row by row, and the other files kept
+// from a desktop data folder, byte for byte.
 //
-// The desktop side is read the way the web app reads desktop files (Workspace),
-// the web side the way it reads its own (WebBooks), so what is compared is what
-// each shows. The desktop folder is only read.
+// Each side is read the way the app reads it (a desktop folder as the Java
+// program would; web data through WebBooks), so what is compared is what each
+// shows. Nothing is written to either side.
 
 import { BillType, Letterhead, letterheadFromImpinfo, readBackupPath, readDropdownLines, readImpinfo, readPassword } from './config';
-import { FsDir, findEntry, readOnly, tryDir } from './fs';
+import { FsDir, findEntry, pick, readOnly } from './fs';
 import { SEPARATOR, parseBillLine } from './bill';
-import { compareIgnoreCase, sortStrings } from './sort';
-import { EXTRAS, WebBooks, dropdownLines } from './webstore';
-import { BILLS, LOCKS, Workspace, desktopBillTypes } from './workspace';
+import { compareIgnoreCase, sameName, sortStrings } from './sort';
+import { ClientYear, WebBooks, billLinesOf, billNamesOf, dropdownLines } from './webstore';
+import { BILLNO, BILLS, DesktopData, JAVA_TEMP, LOCKS, SERIAL, desktopBillTypes } from './desktop';
 import { isYear } from './years';
+import { mapLimit } from './util';
 import type { DesktopFolders, Progress } from './migrate';
 
 export interface Difference {
   where: string;
+  /** What the first side has. */
   desktop: string;
+  /** What the second side has. */
   web: string;
 }
 
@@ -33,10 +36,75 @@ export interface VerifyReport {
 }
 
 const LIMIT = 500;
-const SERIAL = 'serialno.txt';
-const BILLNO = 'billfromto.txt';
-const JAVA_TEMP = '1q2m.txt';
 const GROUP = '(new group)';
+
+/** One side of a comparison. */
+export interface Side {
+  /** The password as stored in plain (desktop pass.txt); undefined when it cannot be read back. */
+  password(): Promise<string | null | undefined>;
+  checkPassword?(password: string): Promise<boolean>;
+  types(): Promise<BillType[]>;
+  letterhead(): Promise<Letterhead | null>;
+  impinfoExtra(): Promise<string[]>;
+  dropdowns(): Promise<string[]>;
+  autoBackup(): Promise<string>;
+  years(): Promise<string[]>;
+  clients(year: string): Promise<{ name: string; serial: string; billNo: string; billTypes: string[] }[]>;
+  bills(year: string, client: string, folder: string): Promise<string[]>;
+  lines(year: string, client: string, folder: string, bill: string): Promise<string[] | null>;
+  /** Other files kept from a desktop data folder: path -> reader. */
+  others(): Promise<Map<string, () => Promise<Uint8Array | null>>>;
+}
+
+/** A desktop installation as a side (only read). */
+export function desktopSide(f: DesktopFolders): Side {
+  const program = readOnly(f.program);
+  const data = f.data ? readOnly(f.data) : null;
+  const d = data ? new DesktopData(data) : null;
+  let types: Promise<BillType[]> | null = null;
+  const t = () => (types ??= desktopBillTypes(program, data));
+  return {
+    password: () => readPassword(program),
+    types: t,
+    letterhead: async () => letterheadFromImpinfo(await readImpinfo(program)),
+    impinfoExtra: async () => ((await readImpinfo(program)) ?? []).slice(4),
+    dropdowns: async () => (await readDropdownLines(program)).filter((l) => l.trim() !== ''),
+    autoBackup: () => readBackupPath(program),
+    years: async () => (d ? d.years() : []),
+    clients: async (year) => (d ? (await d.clients(year)).map((c) => ({ ...c, billTypes: [] })) : []),
+    bills: async (year, client, folder) => (d ? d.bills(year, client, folder) : []),
+    lines: async (year, client, folder, bill) => (d ? d.readBillLines(year, client, folder, bill) : null),
+    others: async () => (data ? otherDesktopFiles(data, await t()) : new Map()),
+  };
+}
+
+/** Web data as a side. Each year's clients are read once (the data does not change during a comparison). */
+export function webSide(web: WebBooks): Side {
+  const years = new Map<string, Promise<ClientYear[]>>();
+  const recs = (year: string) => {
+    let p = years.get(year);
+    if (!p) years.set(year, (p = web.records(year)));
+    return p;
+  };
+  const rec = async (year: string, client: string) => {
+    const all = await recs(year);
+    return all.find((r) => r.name === client) ?? all.find((r) => sameName(r.name, client)) ?? null;
+  };
+  return {
+    password: async () => undefined,
+    checkPassword: (p) => web.checkPassword(p),
+    types: () => web.billTypes(),
+    letterhead: () => web.letterhead(),
+    impinfoExtra: async () => (await web.settings()).desktop.impinfoExtra,
+    dropdowns: async () => dropdownLines((await web.settings()).dropdowns),
+    autoBackup: () => web.backupPath(),
+    years: () => web.years(),
+    clients: async (year) => (await recs(year)).map((r) => ({ name: r.name, serial: r.serial, billNo: r.billNo, billTypes: r.bills.map((b) => b.type) })),
+    bills: async (year, client, folder) => billNamesOf(await rec(year, client), folder),
+    lines: async (year, client, folder, bill) => billLinesOf(await rec(year, client), folder, bill),
+    others: async () => new Map((await web.settings()).desktop.files.map((f) => [f.path, () => web.readExtra(f)])),
+  };
+}
 
 /** A bill line as both formats read it: trailing spaces and the form of a group break do not matter. */
 function canonical(line: string): string {
@@ -55,20 +123,18 @@ const showValue = (v: string) => (v === '' ? '(empty)' : v);
 const showTypes = (t: BillType[]) => t.map((x) => (x.folder === x.tab ? x.tab : `${x.tab} (folder ${x.folder})`)).join(', ') || '(none)';
 const showLines = (l: string[]) => l.map((x) => `“${x}”`).join(' / ') || '(empty)';
 
-type FileRef = { dir: FsDir; name: string };
-
-async function allFiles(dir: FsDir, path: string[], out: Map<string, FileRef>): Promise<void> {
+async function allFiles(dir: FsDir, path: string[], out: Map<string, () => Promise<Uint8Array | null>>): Promise<void> {
   for (const e of await dir.list()) {
-    if (e.kind === 'file') out.set([...path, e.name].join('/'), { dir, name: e.name });
+    if (e.kind === 'file') out.set([...path, e.name].join('/'), () => dir.read(e.name));
     else await allFiles(await dir.dir(e.name), [...path, e.name], out);
   }
 }
 
-/** Files of a desktop data folder that the app does not read as data (paths joined with /). */
-async function otherDesktopFiles(data: FsDir, types: BillType[]): Promise<Map<string, FileRef>> {
-  const out = new Map<string, FileRef>();
+/** Files of a desktop data folder that are not read as data (paths joined with /). */
+export async function otherDesktopFiles(data: FsDir, types: BillType[]): Promise<Map<string, () => Promise<Uint8Array | null>>> {
+  const out = new Map<string, () => Promise<Uint8Array | null>>();
   const other = async (dir: FsDir, name: string, kind: 'file' | 'directory', path: string[]) => {
-    if (kind === 'file') out.set([...path, name].join('/'), { dir, name });
+    if (kind === 'file') out.set([...path, name].join('/'), () => dir.read(name));
     else await allFiles(await dir.dir(name), [...path, name], out);
   };
   const billsName = (await findEntry(data, BILLS, 'directory'))?.name;
@@ -93,13 +159,14 @@ async function otherDesktopFiles(data: FsDir, types: BillType[]): Promise<Map<st
           continue;
         }
         const cd = await yd.dir(c.name);
-        const values = new Set([(await findEntry(cd, SERIAL, 'file'))?.name, (await findEntry(cd, BILLNO, 'file'))?.name]);
+        const entries = await cd.list();
+        const values = new Set([pick(entries, SERIAL, 'file')?.name, pick(entries, BILLNO, 'file')?.name]);
         const typeDirs = new Set<string>();
         for (const t of types) {
-          const td = await findEntry(cd, t.folder, 'directory');
+          const td = pick(entries, t.folder, 'directory');
           if (td) typeDirs.add(td.name);
         }
-        for (const x of await cd.list()) {
+        for (const x of entries) {
           if (x.kind === 'file' && values.has(x.name)) continue;
           if (x.kind === 'directory' && typeDirs.has(x.name)) {
             const td = await cd.dir(x.name);
@@ -115,137 +182,138 @@ async function otherDesktopFiles(data: FsDir, types: BillType[]): Promise<Map<st
   return out;
 }
 
-function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
-  return a.length === b.length && a.every((x, i) => x === b[i]);
+function sameBytes(a: Uint8Array | null, b: Uint8Array | null): boolean {
+  return !!a && !!b && a.length === b.length && a.every((x, i) => x === b[i]);
 }
 
-export async function verify(
-  desktop: DesktopFolders,
-  web: WebBooks,
-  opts: { relocated?: string[]; onProgress?: Progress } = {},
-): Promise<VerifyReport> {
-  const program = readOnly(desktop.program);
-  const data = desktop.data ? readOnly(desktop.data) : null;
+/** Compares a desktop installation with web data. */
+export function verify(desktop: DesktopFolders, web: WebBooks, opts: { relocated?: string[]; onProgress?: Progress } = {}): Promise<VerifyReport> {
+  return compare(desktopSide(desktop), webSide(web), opts);
+}
+
+/** Compares two sides; differences say what `a` has and what `b` has. */
+export async function compare(a: Side, b: Side, opts: { relocated?: string[]; onProgress?: Progress; ignoreAutoBackup?: boolean } = {}): Promise<VerifyReport> {
   const differences: Difference[] = [];
   let more = 0;
-  const differ = (where: string, d: string, w: string) => {
-    if (differences.length < LIMIT) differences.push({ where, desktop: d, web: w });
+  const differ = (where: string, x: string, y: string) => {
+    if (differences.length < LIMIT) differences.push({ where, desktop: x, web: y });
     else more++;
   };
   const notes: string[] = [];
-  const settings = await web.settings();
 
   // ---------- settings ----------
-  const password = await readPassword(program);
-  if (password === null) differ('Password', '(no pass.txt)', 'set');
-  else if (!(await web.checkPassword(password))) differ('Password', 'one password', 'a different password');
+  const pa = await a.password();
+  if (pa === null) notes.push('The desktop folder had no password (pass.txt); the web data has the one chosen when it was made.');
+  else if (pa !== undefined && b.checkPassword && !(await b.checkPassword(pa))) differ('Password', 'one password', 'a different password');
 
-  const types = await desktopBillTypes(program, data);
-  if (showTypes(types) !== showTypes(settings.billTypes)) differ('Bill tabs', showTypes(types), showTypes(settings.billTypes));
+  const types = await a.types();
+  const btypes = await b.types();
+  if (showTypes(types) !== showTypes(btypes)) differ('Bill tabs', showTypes(types), showTypes(btypes));
 
-  const impinfo = await readImpinfo(program);
-  const lh = letterheadFromImpinfo(impinfo);
-  const wlh = settings.letterhead;
-  if (!lh || !wlh) {
-    if (!!lh !== !!wlh) differ('Letterhead', lh ? 'filled in' : 'not filled in', wlh ? 'filled in' : 'not filled in');
+  const la = await a.letterhead();
+  const lb = await b.letterhead();
+  if (!la || !lb) {
+    if (!!la !== !!lb) differ('Letterhead', la ? 'filled in' : 'not filled in', lb ? 'filled in' : 'not filled in');
   } else {
     const parts: [keyof Letterhead, string][] = [['firmAddress', 'address lines'], ['firmName', 'firm name lines'], ['indexTitles', 'index sheet title']];
-    for (const [k, label] of parts) {
-      if (JSON.stringify(lh[k]) !== JSON.stringify(wlh[k])) differ(`Letterhead, ${label}`, showLines(lh[k]), showLines(wlh[k]));
-    }
-    const extra = (impinfo ?? []).slice(4);
-    if (JSON.stringify(extra) !== JSON.stringify(settings.desktop.impinfoExtra)) {
-      differ('impinfo.txt, lines after the letterhead', showLines(extra), showLines(settings.desktop.impinfoExtra));
-    }
+    for (const [k, label] of parts) if (JSON.stringify(la[k]) !== JSON.stringify(lb[k])) differ(`Letterhead, ${label}`, showLines(la[k]), showLines(lb[k]));
+    const ea = await a.impinfoExtra();
+    const eb = await b.impinfoExtra();
+    if (JSON.stringify(ea) !== JSON.stringify(eb)) differ('impinfo.txt, lines after the letterhead', showLines(ea), showLines(eb));
   }
 
-  const dd = (await readDropdownLines(program)).filter((l) => l.trim() !== '');
-  const wdd = dropdownLines(settings.dropdowns);
-  for (let i = 0; i < Math.max(dd.length, wdd.length); i++) {
-    if (dd[i] !== wdd[i]) differ(`Drop-down lists, line ${i + 1}`, dd[i] ?? '(none)', wdd[i] ?? '(none)');
-  }
+  const da = await a.dropdowns();
+  const db = await b.dropdowns();
+  for (let i = 0; i < Math.max(da.length, db.length); i++) if (da[i] !== db[i]) differ(`Drop-down lists, line ${i + 1}`, da[i] ?? '(none)', db[i] ?? '(none)');
 
-  const backup = await readBackupPath(program);
-  if (backup !== settings.autoBackup) differ('Auto-backup folder', showValue(backup), showValue(settings.autoBackup));
+  const ba = await a.autoBackup();
+  const bb = await b.autoBackup();
+  if (ba !== bb && !opts.ignoreAutoBackup) differ('Auto-backup folder', showValue(ba), showValue(bb));
 
   // ---------- years, clients, bills ----------
   const counts = { years: 0, clients: 0, bills: 0, rows: 0, extras: 0 };
   let reworded = 0;
-  const ws = data && (await findEntry(data, BILLS, 'directory')) ? new Workspace(program, data) : null;
-  const dYears = ws ? await ws.years() : [];
-  const wYears = await web.years();
-  for (const year of sortStrings([...new Set([...dYears, ...wYears])])) {
+  const ya = await a.years();
+  const yb = await b.years();
+  for (const year of sortStrings([...new Set([...ya, ...yb])])) {
     counts.years++;
-    if (!dYears.includes(year) || !wYears.includes(year)) {
-      differ(`Year ${year}`, dYears.includes(year) ? 'present' : '(missing)', wYears.includes(year) ? 'present' : '(missing)');
+    if (!ya.includes(year) || !yb.includes(year)) {
+      differ(`Year ${year}`, ya.includes(year) ? 'present' : '(missing)', yb.includes(year) ? 'present' : '(missing)');
       continue;
     }
-    const dc = await ws!.clients(year);
-    const recs = await web.records(year);
-    const names = [...new Set([...dc.map((c) => c.name), ...recs.map((r) => r.name)])].sort(compareIgnoreCase);
-    for (const name of names) {
-      counts.clients++;
-      const d = dc.find((c) => c.name === name);
-      const w = recs.find((r) => r.name === name);
+    const ca = await a.clients(year);
+    const cb = await b.clients(year);
+    const names = [...new Set([...ca.map((c) => c.name), ...cb.map((c) => c.name)])].sort(compareIgnoreCase);
+    // Clients are checked 8 at a time; their differences are listed in name order.
+    const results = await mapLimit(names, 8, async (name) => {
+      const found: Difference[] = [];
+      const local = (where: string, x: string, y: string) => found.push({ where, desktop: x, web: y });
+      const c = { bills: 0, rows: 0, reworded: 0 };
+      const x = ca.find((v) => v.name === name);
+      const y = cb.find((v) => v.name === name);
       const at = `${year} › ${name}`;
-      if (!d || !w) {
-        differ(at, d ? 'present' : '(missing)', w ? 'present' : '(missing)');
-        continue;
+      if (!x || !y) {
+        local(at, x ? 'present' : '(missing)', y ? 'present' : '(missing)');
+        return { found, c };
       }
-      if (d.serial !== w.serial) differ(`${at} › S.No.`, showValue(d.serial), showValue(w.serial));
-      if (d.billNo !== w.billNo) differ(`${at} › Bill No.`, showValue(d.billNo), showValue(w.billNo));
-      for (const b of w.bills) {
-        if (!types.some((t) => t.folder === b.type)) differ(`${at} › ${b.type} › ${b.name}`, '(no such tab)', 'present');
-      }
+      if (x.serial !== y.serial) local(`${at} › S.No.`, showValue(x.serial), showValue(y.serial));
+      if (x.billNo !== y.billNo) local(`${at} › Bill No.`, showValue(x.billNo), showValue(y.billNo));
+      for (const t of new Set([...x.billTypes, ...y.billTypes])) if (!types.some((k) => k.folder === t)) local(`${at} › ${t}`, '(no such tab)', 'has bills');
       for (const t of types) {
-        const db = await ws!.bills(year, name, t.folder);
-        const wb = await web.bills(year, name, t.folder);
-        for (const bill of sortStrings([...new Set([...db, ...wb])])) {
-          counts.bills++;
-          opts.onProgress?.(`Checking… ${counts.bills} bills`);
+        const xb = await a.bills(year, name, t.folder);
+        const yb2 = await b.bills(year, name, t.folder);
+        for (const bill of sortStrings([...new Set([...xb, ...yb2])])) {
+          c.bills++;
           const where = `${at} › ${t.tab} › ${bill}`;
-          if (!db.includes(bill) || !wb.includes(bill)) {
-            differ(where, db.includes(bill) ? 'present' : '(missing)', wb.includes(bill) ? 'present' : '(missing)');
+          if (!xb.includes(bill) || !yb2.includes(bill)) {
+            local(where, xb.includes(bill) ? 'present' : '(missing)', yb2.includes(bill) ? 'present' : '(missing)');
             continue;
           }
-          const dl = (await ws!.readBillLines(year, name, t.folder, bill)) ?? [];
-          const wl = (await web.readBillLines(year, name, t.folder, bill)) ?? [];
-          const dcan = dl.map(canonical);
-          const wcan = wl.map(canonical);
-          counts.rows += dl.length;
-          reworded += dl.filter((l) => l !== standard(l)).length;
-          for (let i = 0; i < Math.max(dcan.length, wcan.length); i++) {
-            if (dcan[i] !== wcan[i]) {
-              differ(`${where}, row ${i + 1}`, show(dcan[i]), show(wcan[i]));
+          const xl = (await a.lines(year, name, t.folder, bill)) ?? [];
+          const yl = (await b.lines(year, name, t.folder, bill)) ?? [];
+          const xc = xl.map(canonical);
+          const yc = yl.map(canonical);
+          c.rows += xl.length;
+          c.reworded += xl.filter((l) => l !== standard(l)).length;
+          for (let i = 0; i < Math.max(xc.length, yc.length); i++) {
+            if (xc[i] !== yc[i]) {
+              local(`${where}, row ${i + 1}`, show(xc[i]), show(yc[i]));
               break;
             }
           }
         }
       }
+      return { found, c };
+    });
+    for (const r of results) {
+      counts.clients++;
+      counts.bills += r.c.bills;
+      counts.rows += r.c.rows;
+      reworded += r.c.reworded;
+      for (const d of r.found) differ(d.where, d.desktop, d.web);
     }
+    opts.onProgress?.(`Checking… ${counts.bills} bills`);
   }
 
-  // ---------- other files of the data folder ----------
+  // ---------- other files kept from the desktop data folder ----------
   const relocated = opts.relocated ?? [];
   const isRelocated = (p: string) => relocated.some((r) => p === r || p.startsWith(`${r}/`));
-  const dOther = data ? await otherDesktopFiles(data, types) : new Map<string, FileRef>();
-  const wOther = new Map<string, FileRef>();
-  const kept = await tryDir(web.root, EXTRAS);
-  if (kept) await allFiles(kept, [], wOther);
-  for (const p of sortStrings([...new Set([...dOther.keys(), ...wOther.keys()])])) {
+  const oa = await a.others();
+  const ob = await b.others();
+  for (const p of sortStrings([...new Set([...oa.keys(), ...ob.keys()])])) {
     if (isRelocated(p)) continue;
     counts.extras++;
-    const d = dOther.get(p);
-    const w = wOther.get(p);
-    if (!d || !w) {
-      differ(`File ${p}`, d ? 'present' : '(missing)', w ? 'present' : '(missing)');
+    const x = oa.get(p);
+    const y = ob.get(p);
+    if (!x || !y) {
+      differ(`File ${p}`, x ? 'present' : '(missing)', y ? 'present' : '(missing)');
       continue;
     }
-    if (!sameBytes(await d.dir.read(d.name), await w.dir.read(w.name))) differ(`File ${p}`, 'one content', 'a different content');
+    if (!sameBytes(await x(), await y())) differ(`File ${p}`, 'one content', 'a different content');
   }
 
   if (counts.extras) {
-    notes.push(`${counts.extras} other file${counts.extras === 1 ? '' : 's'} in the data folder (not bills) ${counts.extras === 1 ? 'is' : 'are'} kept exactly as ${counts.extras === 1 ? 'it was' : 'they were'}.`);
+    notes.push(`${counts.extras} other file${counts.extras === 1 ? '' : 's'} from the desktop data folder (not bills) ${counts.extras === 1 ? 'is' : 'are'} kept exactly as ${counts.extras === 1 ? 'it was' : 'they were'}.`);
   }
   if (reworded) {
     notes.push(
