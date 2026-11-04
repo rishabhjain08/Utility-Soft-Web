@@ -8,10 +8,10 @@ import { WebBooks, createStore } from '../core/webstore';
 import { ensurePermission, pickFolder, rememberProgram, rememberedProgram, supportsFolders } from './folders';
 import { checkDesktopPassword, inspectProgram, thisComputer, unlock } from './session';
 import { Modal, attempt, busy, confirmDialog, mountDialog, toast } from './ui';
-import { DriveState, driveState, googleDrive } from './google';
-import { fromDrive } from '../core/backup';
+import { DriveState, askClientId, driveState, googleDrive } from './google-setup';
+import { fromDrive, fromFile } from '../core/backup';
 import { DriveBackup } from '../core/drive';
-import { writeOut } from '../core/pack';
+import { MemDir, writeOut } from '../core/pack';
 import { chooseNewFolder } from './migrate';
 import { LetterheadPart, LetterheadPreview, SAMPLE } from './letterhead-preview';
 
@@ -103,6 +103,7 @@ export function Welcome({ onOpened }: { onOpened: (dir: FsDir, kind: OpenedKind,
   const restoreDrive = () =>
     attempt(async () => {
       setMessage(null);
+      if (!(await driveState()).ok && !(await askClientId())) return;
       const list = await busy('Looking in Google Drive…', () => googleDrive().list());
       if (!list) return;
       if (list.length === 0) return setMessage('There are no Utility Soft backups in this Google account’s Drive.');
@@ -123,8 +124,20 @@ export function Welcome({ onOpened }: { onOpened: (dir: FsDir, kind: OpenedKind,
       ));
       if (!b) return;
       const mem = await busy('Downloading from Google Drive…', () => fromDrive(googleDrive(), b));
-      if (!mem) return;
-      const dir = await chooseNewFolder({ id: 'utility-soft-restore', title: 'Where should the restored data go?', suggestion: b.label || 'Utility Soft Data' });
+      if (mem) await restoreInto(mem, b.label);
+    });
+
+  /** A backup file downloaded earlier (from Drive, or kept on a USB stick). */
+  const restoreFile = (f: File) =>
+    attempt(async () => {
+      setMessage(null);
+      const mem = await busy('Opening the backup…', async () => fromFile(new Uint8Array(await f.arrayBuffer())));
+      if (mem) await restoreInto(mem, f.name.replace(/^Utility Soft backup - /, '').replace(/ - \d{4}-.*$/, '').replace(/\.usbackup$/, ''));
+    });
+
+  const restoreInto = (mem: MemDir, label: string) =>
+    attempt(async () => {
+      const dir = await chooseNewFolder({ id: 'utility-soft-restore', title: 'Where should the restored data go?', suggestion: label || 'Utility Soft Data' });
       if (!dir) return;
       if ((await dir.list()).length) return setMessage(`${dir.name} is not empty.`);
       const ok = await busy('Restoring…', async () => (await writeOut(mem, dir), true));
@@ -174,11 +187,24 @@ export function Welcome({ onOpened }: { onOpened: (dir: FsDir, kind: OpenedKind,
         <button class="big" onClick={startNew}>
           Start a new Utility Soft…
         </button>
-        {drive?.ok && (
+        {drive && (drive.ok || drive.reason === 'setup') && (
           <button class="big" onClick={restoreDrive}>
             Restore from Google Drive…
           </button>
         )}
+        <label class="file-button link-like">
+          <input
+            type="file"
+            accept=".usbackup"
+            onChange={(e) => {
+              const input = e.target as HTMLInputElement;
+              const f = input.files?.[0];
+              input.value = '';
+              if (f) restoreFile(f);
+            }}
+          />
+          <span>Restore from a backup file (.usbackup)…</span>
+        </label>
         <p class="hint">
           To use your existing bills, open the folder with your Utility Soft data, or the desktop program folder (the one with{' '}
           <code>billing.jar</code>, <code>pass.txt</code> and <code>impinfo.txt</code>). To start from nothing, choose where to keep the new

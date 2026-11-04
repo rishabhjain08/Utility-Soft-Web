@@ -2,9 +2,10 @@ import { useEffect, useState } from 'preact/hooks';
 import { FsDir } from '../core/fs';
 import { BinEntry, Client, WebBooks } from '../core/webstore';
 import { backupFolderName } from '../core/util';
-import { BackupEntry, backupToDrive, checkBackup, fromDrive, insideBackups, isBackup, listBackups, makeBackup, openBackup, pruneBackups, restoreBackup } from '../core/backup';
+import { BackupEntry, backupToDrive, checkBackup, fromDrive, fromFile, insideBackups, isBackup, listBackups, makeBackup, openBackup, pruneBackups, restoreBackup } from '../core/backup';
 import { DriveBackup } from '../core/drive';
-import { APP_URL, DriveState, driveProblem, driveState, googleDrive } from './google';
+import { APP_URL, DriveState, askClientId, driveProblem, driveSettingsDialog, driveState, googleDrive } from './google-setup';
+import { preloadGoogle } from './google';
 import { compare, webSide } from '../core/verify';
 import { Session, nameThisComputer, refreshSession, thisComputer } from './session';
 import { ReportView, compareFlow, exportFlow } from './migrate';
@@ -109,6 +110,7 @@ export function UtilityDialog({ s, year, selection, onClose, onCopy, onNextYear,
           <h3>Safety</h3>
           {item('Backups…', 'Back up now, the automatic daily backups, and restoring one.', () => setSub('backup'))}
           {item('Deleted clients and bills…', 'Put back something deleted in the last 30 days.', () => setSub('bin'))}
+          {item('Google Drive…', 'Backups in your Google Drive: set up, or change the Google Cloud project.', () => attempt(driveSettingsDialog))}
           {item('Problem log', 'What went wrong and when, to send to whoever helps you.', () => setSub('log'))}
         </section>
         <section>
@@ -378,7 +380,24 @@ function BackupDialog({ s, onClose, onRestored }: { s: Session; onClose: () => v
               ))}
             </ul>
           )}
-          <button onClick={restoreFrom}>Restore from a backup folder…</button>
+          <button onClick={restoreFrom}>Restore from a backup folder…</button>{' '}
+          <label class="file-button">
+            <input
+              type="file"
+              accept=".usbackup"
+              onChange={(e) => {
+                const input = e.target as HTMLInputElement;
+                const f = input.files?.[0];
+                input.value = '';
+                if (f)
+                  attempt(async () => {
+                    const dir = await busy('Opening the backup…', async () => fromFile(new Uint8Array(await f.arrayBuffer())));
+                    if (dir) await compareAndRestore(s, dir, f.name, () => (onRestored(), onClose()));
+                  });
+              }}
+            />
+            <span>Restore from a backup file (.usbackup)…</span>
+          </label>
         </section>
       </div>
       <DriveSection s={s} onRestored={() => (onRestored(), onClose())} />
@@ -393,7 +412,9 @@ function DriveSection({ s, onRestored }: { s: Session; onRestored: () => void })
   const [list, setList] = useState<DriveBackup[] | null>(null);
   const load = () =>
     attempt(async () => {
-      setState(await driveState());
+      const st = await driveState();
+      setState(st);
+      if (st.ok) preloadGoogle();
       setSettings((await s.ws.settings()).drive);
     });
   useEffect(() => {
@@ -421,17 +442,20 @@ function DriveSection({ s, onRestored }: { s: Session; onRestored: () => void })
       {state === null ? (
         <p>Loading…</p>
       ) : !state.ok ? (
-        <p class="hint">
-          {driveProblem(state)}
-          {state.reason === 'file' && (
-            <>
-              {' '}
-              <a href={APP_URL} target="_blank" rel="noreferrer">
-                Open it there
-              </a>
-            </>
-          )}
-        </p>
+        <>
+          <p class="hint">
+            {driveProblem(state)}
+            {state.reason === 'file' && (
+              <>
+                {' '}
+                <a href={APP_URL} target="_blank" rel="noreferrer">
+                  Open it there
+                </a>
+              </>
+            )}
+          </p>
+          {state.reason === 'setup' && <button onClick={() => attempt(async () => (await askClientId()) && load())}>Set up Google Drive…</button>}
+        </>
       ) : (
         <>
           <p class="hint">
@@ -447,6 +471,9 @@ function DriveSection({ s, onRestored }: { s: Session; onRestored: () => void })
               <span>Every day (asked once a day, with one click)</span>
             </label>
             <span class="hint">{settings?.last ? `Last: ${when(settings.last)}` : 'Not backed up to Drive yet.'}</span>
+            <button class="link" onClick={() => attempt(async () => (await driveSettingsDialog(), load()))}>
+              Google Cloud project…
+            </button>
           </div>
           {list === null ? (
             <button class="link" onClick={show}>

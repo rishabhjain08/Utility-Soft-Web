@@ -69,8 +69,8 @@ After that the app offers **Continue with “…”** and only asks for the pass
 - **Backups in Google Drive:** in Utility ▸ *Backups*, a copy of each backup can go to your Google
   Drive, encrypted, once a day with one click. Restore from there, or from the start screen
   on a new or lost computer. It works when Utility Soft is opened from its web address,
-  https://rishabhjain08.github.io/Utility-Soft-Web/; setting it up once is described in
-  [docs/google-drive-setup.md](docs/google-drive-setup.md).
+  https://rishabhjain08.github.io/Utility-Soft-Web/, with your own Google Cloud project, which is
+  not part of the app (typed in once per computer, see [docs/google-drive-setup.md](docs/google-drive-setup.md)).
 - **Deleted clients and bills** stay in a bin for 30 days (Utility ▸ *Deleted clients and
   bills*). This includes clients replaced by *Copy clients to another year*.
 - **Undo and redo** in the bill editor (Ctrl+Z, Ctrl+Y), and **earlier versions of a bill**

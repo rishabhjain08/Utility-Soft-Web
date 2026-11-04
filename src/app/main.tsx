@@ -9,7 +9,7 @@ import { groupIndian } from '../core/money';
 import { billNoClashes } from '../core/billno';
 import { KeysDialog, OpenAt, SearchDialog } from './search';
 import { backupToDrive, driveDue } from '../core/backup';
-import { driveState, googleDrive } from './google';
+import { driveState, googleDrive, preloadGoogle } from './google';
 import { attempt, busy, confirmDialog, promptDialog, toast } from './ui';
 
 type Dialog =
@@ -50,7 +50,9 @@ export function Main({ s, year, setYear, onOpen, onOpenAt, onPayments, onExit, o
   useEffect(() => {
     (async () => {
       const st = await driveState();
-      setDriveDueNow(st.ok && driveDue((await s.ws.settings()).drive));
+      const due = st.ok && driveDue((await s.ws.settings()).drive);
+      if (due) preloadGoogle();
+      setDriveDueNow(due);
     })().catch(() => undefined);
   }, [s]);
   const driveNow = () =>

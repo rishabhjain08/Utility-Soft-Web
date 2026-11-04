@@ -213,6 +213,8 @@ export async function restoreBackup(web: WebBooks, dir: FsDir, now = Date.now())
 
 /** A backup made now and sent to Drive (then older ones there thinned out like the daily ones). */
 export async function backupToDrive(web: WebBooks, drive: Drive, now = Date.now()): Promise<void> {
+  // Signing in first: Google's window can only open straight after a click.
+  await drive.folder();
   const mem = new MemDir('backup');
   await makeBackup(web, mem, { now });
   const data = await pack(mem);
@@ -227,10 +229,15 @@ export async function backupToDrive(web: WebBooks, drive: Drive, now = Date.now(
 
 /** A Drive backup, downloaded and checked, as a folder in memory. */
 export async function fromDrive(drive: Drive, b: DriveBackup): Promise<MemDir> {
-  const mem = unpack(await drive.download(b.id));
-  if (!mem || !(await isBackup(mem))) throw new UserError('This file in Google Drive is not a Utility Soft backup.');
+  return fromFile(await drive.download(b.id));
+}
+
+/** A backup file (as kept in Drive, .usbackup), checked, as a folder in memory. */
+export async function fromFile(data: Uint8Array): Promise<MemDir> {
+  const mem = unpack(data);
+  if (!mem || !(await isBackup(mem))) throw new UserError('This file is not a Utility Soft backup.');
   const broken = await checkBackup(mem);
-  if (broken.length) throw new UserError(`This backup in Google Drive is damaged (${broken.length} file${broken.length === 1 ? '' : 's'}). Choose another one.`);
+  if (broken.length) throw new UserError(`This backup is damaged (${broken.length} file${broken.length === 1 ? '' : 's'}). Choose another one.`);
   return mem;
 }
 

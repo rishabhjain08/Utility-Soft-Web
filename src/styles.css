@@ -1743,3 +1743,68 @@ section.drive {
   padding-top: 8px;
   border-top: 1px solid var(--rule);
 }
+.file-button {
+  display: inline-flex;
+  position: relative;
+  cursor: pointer;
+}
+.file-button input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.file-button span {
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  padding: 5px 12px;
+  background: var(--paper);
+}
+.file-button.link-like span {
+  border: none;
+  background: none;
+  color: var(--ledger);
+  text-decoration: underline;
+  padding: 6px 0;
+}
+.wizard .wizard-steps {
+  padding-left: 22px;
+}
+.wizard-steps > li {
+  margin: 6px 0;
+}
+.wizard-steps > li.done .step-title {
+  color: var(--muted);
+}
+.wizard-steps > li.current .step-title {
+  font-weight: 700;
+  color: var(--ink);
+  text-decoration: none;
+}
+.step-body {
+  margin: 6px 0 10px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--ledger);
+  background: var(--paper);
+}
+.step-body ul,
+.step-body ol {
+  padding-left: 20px;
+}
+.step-body li {
+  margin: 4px 0;
+}
+a.go {
+  font-weight: 600;
+  color: var(--ledger);
+}
+.copy {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.copy code {
+  background: var(--ledger-soft);
+  padding: 1px 6px;
+  border-radius: 3px;
+}

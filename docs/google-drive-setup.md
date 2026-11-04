@@ -1,67 +1,39 @@
-# Setting up Google Drive backups
+# Google Drive backups
 
-Google allows its sign-in only from a web address, so Utility Soft is also
-published at **https://rishabhjain08.github.io/Utility-Soft-Web/**. The app at
-that address is the same: it still keeps the data in the folder you choose on
-your computer, and works offline once opened. Only the backups go to Drive,
-encrypted.
+## For whoever uses Utility Soft
 
-This is done once, by the owner of the repository and of a Google account.
+The setup is guided inside the app: **Utility ▸ Google Drive… ▸ Set up Google Drive…**.
+It's also under **Utility ▸ Backups ▸ Google Drive**, and on a new computer under
+**Restore from Google Drive…** on the start screen.
 
-## 1. Switch on the web address (GitHub Pages)
+- **Each step:** it opens the right Google Cloud page in a new tab, and gives the exact
+  values to copy.
+- **Your own project:** you make a Google Cloud project that is yours alone. Its *Client ID*
+  is not part of Utility Soft. It is kept only in that browser, so it is typed in once per
+  computer. Keep it with your recovery code.
+- **Only your accounts:** the project stays in *Testing*, with only your own Google
+  account(s) as test users, so Google refuses anyone else.
+- **The smallest permission:** `drive.file`. Utility Soft sees only the files it makes in
+  your Drive (its *Utility Soft backups* folder), never anything else. The backups are
+  encrypted before they leave the computer.
+- **Changing the project:** Utility ▸ Google Drive ▸ *Change the Google Cloud project…*.
+  Google lets each project see only the files it made, so older backups are then restored by
+  downloading them from drive.google.com and choosing *Restore from a backup file*. That
+  option is in Utility ▸ Backups, or on the start screen on a new computer.
+
+Google allows its sign-in only from a web address, not from a file on disk. So Drive works
+when Utility Soft is opened from https://rishabhjain08.github.io/Utility-Soft-Web/ (or another
+web address it is published at). The data still stays in the folder you choose on your
+computer.
+
+## For the owner of the repository: the web address
+
+The web address is the `gh-pages` branch, published by `npm run publish-pages`. To switch it on
+once:
 
 1. Open https://github.com/rishabhjain08/Utility-Soft-Web/settings/pages
-2. Under **Build and deployment**:
-   - Source: **Deploy from a branch**.
-   - Branch: **gh-pages**, folder **/ (root)**.
-   - Save.
+2. Under **Build and deployment**, set Source to **Deploy from a branch**, Branch to
+   **gh-pages**, folder **/ (root)**, and **Save**.
 3. After a minute, https://rishabhjain08.github.io/Utility-Soft-Web/ opens Utility Soft.
 
-## 2. Let the app use Google Drive (Google Cloud)
-
-1. Open https://console.cloud.google.com/ with your Google account. At the top, choose **Select a
-   project ▸ New project**, name it `Utility Soft`, and **Create**.
-2. **APIs & Services ▸ Library**: search for **Google Drive API**, open it, and **Enable** it.
-3. **Google Auth Platform ▸ Branding** (on older screens, *OAuth consent screen*):
-   - App name: `Utility Soft`.
-   - User support email: your email.
-   - Developer contact: your email.
-   - Save.
-4. **Audience**: User type **External**. Then **Publish app** ▸ **Confirm**. The app asks only
-   for the "drive.file" permission, which needs no review by Google.
-5. **Data access** (or *Scopes*): **Add or remove scopes**, tick
-   `.../auth/drive.file` ("See, edit, create and delete only the specific Google Drive files
-   you use with this app"), and **Update**, then **Save**.
-6. **Clients** (or *Credentials ▸ Create credentials ▸ OAuth client ID*):
-   - Application type: **Web application**.
-   - Name: `Utility Soft`.
-   - Authorized JavaScript origins: **Add URI** `https://rishabhjain08.github.io`.
-   - **Create**.
-7. Copy the **Client ID**. It ends with `.apps.googleusercontent.com` and is not a secret.
-
-## 3. Put the Client ID in the app
-
-Set `GOOGLE_CLIENT_ID` in `src/app/google.ts` to the Client ID, then publish:
-
-```
-npm run publish-pages
-```
-
-Then open https://rishabhjain08.github.io/Utility-Soft-Web/. In **Utility ▸ Backups ▸ Google
-Drive**, *Back up to Google Drive now* opens a Google window the first time, to allow
-Utility Soft. The backups go to a **Utility Soft backups** folder in your Drive.
-
-## Using it
-
-- **Every day:** tick *Every day*. Once a day the app offers *Back up now* at the top of the client
-  list, and asks again when exiting. It's one click, because the Google window needs a click to
-  open.
-- **Restore:** in *Utility ▸ Backups ▸ Google Drive*, choose *Show the backups in Google Drive*,
-  then *Compare or restore* on one of them.
-- **A new or lost computer:** open the web address, click **Restore from Google Drive…** on the
-  start screen, choose the backup and an empty folder, then enter the password of that time, or use
-  the recovery code.
-- **Which backups are kept:** the last 7 days, 4 weeks and 12 months of each set of data; older
-  ones are removed from Drive.
-- **Privacy:** the files are encrypted before they leave the computer, so Google cannot read them.
-  The app can see only the files it made in Drive.
+The published app has no Google project in it; each user brings their own, as above.

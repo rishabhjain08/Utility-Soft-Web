@@ -4,10 +4,8 @@
 
 import { Drive } from '../core/drive';
 import { UserError } from '../core/names';
-import { kvGet } from './kv';
+import { kvGet, kvSet } from './kv';
 
-/** The app's Google OAuth client id (public; made in Google Cloud, see docs/google-drive-setup.md). */
-export const GOOGLE_CLIENT_ID = '';
 /** Where the app is published (Google accepts sign-in from here). */
 export const APP_URL = 'https://rishabhjain08.github.io/Utility-Soft-Web/';
 
@@ -27,8 +25,17 @@ interface Gis {
 
 export type DriveState = { ok: true } | { ok: false; reason: 'file' | 'setup' | 'offline' };
 
-async function clientId(): Promise<string> {
-  return (await kvGet<string>('googleClientId')) || GOOGLE_CLIENT_ID;
+// The owner's own Google Cloud client id is never part of the app: it is typed in once on each
+// computer and kept only in that browser (see docs/google-drive-setup.md).
+export async function clientId(): Promise<string> {
+  return (await kvGet<string>('googleClientId')) ?? '';
+}
+
+export const CLIENT_ID_FORM = /^[0-9]+-[0-9a-z]+\.apps\.googleusercontent\.com$/;
+
+export async function setClientId(id: string): Promise<void> {
+  token = null;
+  await kvSet('googleClientId', id.trim());
 }
 
 /** Whether Drive can be used here (and why not). */
@@ -42,7 +49,7 @@ export async function driveState(): Promise<DriveState> {
 export function driveProblem(s: DriveState): string {
   if (s.ok) return '';
   if (s.reason === 'file') return `Google Drive works when Utility Soft is opened from its web address, ${APP_URL} (it still works offline and uses the same folder).`;
-  if (s.reason === 'setup') return 'Google Drive is not set up for this copy of Utility Soft yet.';
+  if (s.reason === 'setup') return 'Google Drive is not set up on this computer yet.';
   return 'There is no internet connection.';
 }
 
@@ -63,6 +70,11 @@ function loadGis(): Promise<Gis> {
     document.head.appendChild(s);
   });
   return gis;
+}
+
+/** Loads Google's sign-in ahead of time, so its window opens right away on the next click (browsers block it otherwise). */
+export function preloadGoogle(): void {
+  loadGis().catch(() => undefined);
 }
 
 let token: { value: string; until: number } | null = null;
